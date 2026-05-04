@@ -31,8 +31,11 @@ struct ReaderView: View {
     }
 
     var currentChapterNumber: String {
-        chapterBoundaries.last(where: { $0.startIndex <= currentPage })?.slug
-            .flatMap { s in manga.chapters.first(where: { $0.slug == s })?.number } ?? chapter.number
+        let boundaries = chapterBoundaries
+        guard let lastBoundary = boundaries.last(where: { $0.startIndex <= currentPage }) else {
+            return chapter.number
+        }
+        return manga.chapters.first(where: { $0.slug == lastBoundary.slug })?.number ?? chapter.number
     }
 
     var body: some View {
