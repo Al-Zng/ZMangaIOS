@@ -6,7 +6,7 @@ struct ReaderView: View {
 
     let manga: Manga
     let chapter: Chapter
-    let allChapters: [Chapter] // sorted newest first
+    let allChapters: [Chapter]
 
     @State private var pages: [String] = []
     @State private var isLoading = true
@@ -45,7 +45,6 @@ struct ReaderView: View {
             } else if let err = errorMessage {
                 errorOverlay(err)
             } else {
-                // Infinite scroll reader
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
@@ -71,14 +70,12 @@ struct ReaderView: View {
                     }
                 }
                 .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showUI.toggle()
-                    }
+                    withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
                     resetUITimer()
                 }
             }
 
-            // Always visible minimal exit button
+            // زر خروج دائم الظهور في جميع الحالات
             VStack {
                 HStack {
                     Button {
@@ -98,7 +95,6 @@ struct ReaderView: View {
                 Spacer()
             }
 
-            // Full UI overlay (shown only when showUI == true)
             if showUI {
                 topBar
             }
@@ -110,9 +106,7 @@ struct ReaderView: View {
         }
         .ignoresSafeArea(edges: .bottom)
         .statusBarHidden(!showUI)
-        .task {
-            await loadInitialChapter()
-        }
+        .task { await loadInitialChapter() }
         .onAppear {
             resetUITimer()
             if let progress = store.history.first(where: {
@@ -125,7 +119,6 @@ struct ReaderView: View {
 
     var topBar: some View {
         HStack(spacing: 12) {
-            // (الزر موجود في الـ overlay الدائم)
             VStack(alignment: .leading, spacing: 1) {
                 Text(manga.title)
                     .font(.system(size: 13, weight: .semibold))
@@ -150,8 +143,7 @@ struct ReaderView: View {
         .padding(.top, 56)
         .padding(.bottom, 12)
         .background(
-            LinearGradient(colors: [.black.opacity(0.7), .clear],
-                           startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.black.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom)
         )
     }
 
@@ -161,8 +153,7 @@ struct ReaderView: View {
                 VStack(spacing: 0) {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            Rectangle()
-                                .fill(Color.white.opacity(0.1))
+                            Rectangle().fill(Color.white.opacity(0.1))
                             Rectangle()
                                 .fill(ZTheme.accent)
                                 .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(allPages.count))
@@ -220,7 +211,10 @@ struct ReaderView: View {
                 isLoading = false
             }
         } catch ZMangaError.cloudflareChallenge {
-            await MainActor.run { isLoading = false }
+            await MainActor.run {
+                errorMessage = "Cloudflare verification required. Use the back button and try again."
+                isLoading = false
+            }
         } catch {
             await MainActor.run {
                 errorMessage = error.localizedDescription
@@ -284,10 +278,9 @@ struct ReaderView: View {
     }
 }
 
-// MARK: - Page Image View
+// MARK: - Page Image View (With Quality Enhancement)
 struct PageImageView: View {
     let url: String
-    @State private var failedToLoad = false
 
     var body: some View {
         GeometryReader { geo in
@@ -295,7 +288,7 @@ struct PageImageView: View {
                 switch phase {
                 case .success(let image):
                     image
-                        .interpolation(.none)
+                        .interpolation(.none)      // يمنح وضوحًا أفضل لصور المانجا
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: geo.size.width)
