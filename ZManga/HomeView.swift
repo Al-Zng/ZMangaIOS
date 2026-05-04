@@ -17,7 +17,6 @@ struct HomeView: View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
-
                 ScrollView {
                     VStack(alignment: .leading, spacing: 28) {
                         // Header
@@ -36,31 +35,24 @@ struct HomeView: View {
                         .padding(.horizontal, 20)
                         .padding(.top, 8)
 
-                        // Continue Reading
                         if !store.history.isEmpty {
                             continueReadingSection
                         }
 
-                        // Popular
                         sectionHeader("Popular")
                         popularSection
 
-                        // Latest Updates
                         sectionHeader("Latest Updates")
                         latestSection
 
                         Color.clear.frame(height: 20)
                     }
                 }
-                .refreshable {
-                    await loadAll()
-                }
+                .refreshable { await loadAll() }
             }
             .navigationBarHidden(true)
         }
-        .task {
-            await loadAll()
-        }
+        .task { await loadAll() }
     }
 
     var continueReadingSection: some View {
@@ -182,7 +174,7 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Continue Reading Card
+// MARK: - Cards...
 struct ContinueReadingCard: View {
     let progress: ReadingProgress
     var body: some View {
@@ -197,7 +189,6 @@ struct ContinueReadingCard: View {
             }
             .frame(width: 120, height: 170)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(progress.mangaTitle)
                     .font(.system(size: 11, weight: .semibold))
@@ -209,17 +200,13 @@ struct ContinueReadingCard: View {
             }
             .padding(8)
             .frame(width: 120, alignment: .leading)
-            .background(
-                LinearGradient(colors: [.clear, .black.opacity(0.9)],
-                               startPoint: .top, endPoint: .bottom)
-            )
+            .background(LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom))
         }
         .frame(width: 120, height: 170)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 
-// MARK: - Manga Card Vertical (Horizontal scroll)
 struct MangaCardVertical: View {
     let manga: Manga
     var body: some View {
@@ -229,16 +216,13 @@ struct MangaCardVertical: View {
                 case .success(let image):
                     image.resizable().aspectRatio(contentMode: .fill)
                 case .failure:
-                    ZTheme.card.overlay(
-                        Image(systemName: "photo").foregroundColor(ZTheme.textTertiary)
-                    )
+                    ZTheme.card.overlay(Image(systemName: "photo").foregroundColor(ZTheme.textTertiary))
                 default:
                     ZTheme.card.overlay(ProgressView().tint(ZTheme.accent))
                 }
             }
             .frame(width: 110, height: 155)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-
             Text(manga.title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(ZTheme.textPrimary)
@@ -249,7 +233,6 @@ struct MangaCardVertical: View {
     }
 }
 
-// MARK: - Manga Grid Card
 struct MangaGridCard: View {
     let manga: Manga
     var body: some View {
@@ -257,13 +240,9 @@ struct MangaGridCard: View {
             AsyncImage(url: URL(string: manga.coverURL)) { phase in
                 switch phase {
                 case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
+                    image.resizable().aspectRatio(contentMode: .fill)
                 case .failure:
-                    ZTheme.card.overlay(
-                        Image(systemName: "photo").foregroundColor(ZTheme.textTertiary)
-                    )
+                    ZTheme.card.overlay(Image(systemName: "photo").foregroundColor(ZTheme.textTertiary))
                 default:
                     ZTheme.card.overlay(ProgressView().tint(ZTheme.accent).scaleEffect(0.6))
                 }
@@ -271,7 +250,6 @@ struct MangaGridCard: View {
             .frame(maxWidth: .infinity)
             .aspectRatio(2/3, contentMode: .fill)
             .clipShape(RoundedRectangle(cornerRadius: 7))
-
             Text(manga.title)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(ZTheme.textPrimary)
