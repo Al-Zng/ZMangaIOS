@@ -50,7 +50,8 @@ struct Chapter: Identifiable, Codable, Hashable {
 }
 
 // MARK: - Reading Progress
-struct ReadingProgress: Codable {
+struct ReadingProgress: Identifiable, Codable {
+    var id = UUID()          // ← أُضيف هذا السطر فقط لجعل ReadingProgress متوافقاً مع Identifiable
     var mangaSlug: String
     var mangaTitle: String
     var mangaCover: String
@@ -61,6 +62,7 @@ struct ReadingProgress: Codable {
 
     init(mangaSlug: String, mangaTitle: String, mangaCover: String,
          chapterSlug: String, chapterNumber: String, pageIndex: Int) {
+        self.id = UUID()
         self.mangaSlug = mangaSlug
         self.mangaTitle = mangaTitle
         self.mangaCover = mangaCover
