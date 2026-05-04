@@ -13,14 +13,12 @@ struct ReaderView: View {
     @State private var currentPage = 0
     @State private var showUI = true
     @State private var uiTimer: Timer?
-    @State private var loadedChapters: [String] = [] // slugs of loaded chapters
+    @State private var loadedChapters: [String] = []
     @State private var loadingNextChapter = false
     @State private var allPages: [(chapterSlug: String, url: String)] = []
     @State private var currentChapterSlug: String
     @State private var errorMessage: String?
     @State private var savedPageIndex = 0
-
-    // Track which chapter's pages we're in
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
 
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter]) {
@@ -51,25 +49,20 @@ struct ReaderView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
-                            // Chapter separator
                             if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
                                 ChapterSeparator(
                                     number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??"
                                 )
                             }
-
                             PageImageView(url: page.url)
                                 .onAppear {
                                     currentPage = idx
                                     saveProgress(pageIndex: idx)
-
-                                    // Load next chapter when near end
                                     if idx >= allPages.count - 4 && !loadingNextChapter {
                                         Task { await loadNextChapter() }
                                     }
                                 }
                         }
-
                         if loadingNextChapter {
                             ProgressView()
                                 .tint(ZTheme.accent)
@@ -85,12 +78,31 @@ struct ReaderView: View {
                 }
             }
 
-            // Top UI overlay
+            // Always visible minimal exit button
+            VStack {
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 32, height: 32)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Circle())
+                    }
+                    Spacer()
+                }
+                .padding(.top, 56)
+                .padding(.leading, 16)
+                Spacer()
+            }
+
+            // Full UI overlay (shown only when showUI == true)
             if showUI {
                 topBar
             }
 
-            // Bottom progress bar (always visible)
             VStack {
                 Spacer()
                 bottomBar
@@ -103,7 +115,6 @@ struct ReaderView: View {
         }
         .onAppear {
             resetUITimer()
-            // Restore progress if any
             if let progress = store.history.first(where: {
                 $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug
             }) {
@@ -114,17 +125,7 @@ struct ReaderView: View {
 
     var topBar: some View {
         HStack(spacing: 12) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
-
+            // (الزر موجود في الـ overlay الدائم)
             VStack(alignment: .leading, spacing: 1) {
                 Text(manga.title)
                     .font(.system(size: 13, weight: .semibold))
@@ -134,10 +135,7 @@ struct ReaderView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.6))
             }
-
             Spacer()
-
-            // Page counter
             if !allPages.isEmpty {
                 Text("\(currentPage + 1) / \(allPages.count)")
                     .font(.system(size: 12, weight: .medium))
@@ -161,7 +159,6 @@ struct ReaderView: View {
         Group {
             if !allPages.isEmpty {
                 VStack(spacing: 0) {
-                    // Thin progress bar
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Rectangle()
@@ -178,26 +175,32 @@ struct ReaderView: View {
     }
 
     var loadingOverlay: some View {
-        VStack(spacing: 16) {
-            ProgressView().tint(ZTheme.accent).scaleEffect(1.5)
-            Text("Loading chapter...")
-                .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.6))
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 16) {
+                ProgressView().tint(ZTheme.accent).scaleEffect(1.5)
+                Text("Loading chapter...")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.6))
+            }
         }
     }
 
     func errorOverlay(_ err: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 40, weight: .ultraLight))
-                .foregroundColor(ZTheme.danger)
-            Text(err)
-                .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            Button("Retry") { Task { await loadInitialChapter() } }
-                .foregroundColor(ZTheme.accent)
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 40, weight: .ultraLight))
+                    .foregroundColor(ZTheme.danger)
+                Text(err)
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                Button("Retry") { Task { await loadInitialChapter() } }
+                    .foregroundColor(ZTheme.accent)
+            }
         }
     }
 
@@ -227,14 +230,10 @@ struct ReaderView: View {
     }
 
     func loadNextChapter() async {
-        // Find the next chapter (lower number = next in reading order)
         guard let currentBoundary = chapterBoundaries.last else { return }
         let loadedSlugs = Set(loadedChapters)
-
-        // allChapters is sorted newest first, so next to read = lower index that hasn't been loaded
         guard let currentIdx = allChapters.firstIndex(where: { $0.slug == currentBoundary.slug }),
               currentIdx + 1 < allChapters.count else { return }
-
         let nextChapter = allChapters[currentIdx + 1]
         guard !loadedSlugs.contains(nextChapter.slug) else { return }
 
@@ -256,7 +255,6 @@ struct ReaderView: View {
         }
     }
 
-    // MARK: - Save Progress
     func saveProgress(pageIndex: Int) {
         let chapterSlug: String = {
             for b in chapterBoundaries.reversed() {
@@ -297,6 +295,7 @@ struct PageImageView: View {
                 switch phase {
                 case .success(let image):
                     image
+                        .interpolation(.none)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: geo.size.width)
