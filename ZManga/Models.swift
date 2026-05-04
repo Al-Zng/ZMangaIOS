@@ -75,12 +75,14 @@ struct ReadingProgress: Identifiable, Codable {
 
 // MARK: - AppStore
 class AppStore: ObservableObject {
+    static weak var currentStore: AppStore?
+
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var showCloudflareSheet = false
     @Published var cloudflareURL: URL? = nil
     @Published var cookiesReady = false
-    @Published var reloadTrigger = 0  // للـ reload بعد حل الـ challenge
+    @Published var reloadTrigger = 0
 
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
@@ -146,60 +148,28 @@ class AppStore: ObservableObject {
         showCloudflareSheet = true
     }
 
-    // يُطلق بعد حل الـ challenge لإعادة التحميل
     func triggerReload() {
         reloadTrigger += 1
     }
 }
 
-// MARK: - AppStore Static Reference
-extension AppStore {
-    static weak var currentStore: AppStore?
-}
-
-// MARK: - Errors
-enum ZMangaError: LocalizedError {
-    case cloudflareChallenge
-    case parsingFailed
-    case networkError(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .cloudflareChallenge: return "Cloudflare verification required"
-        case .parsingFailed: return "Failed to parse content"
-        case .networkError(let msg): return msg
-        }
-    }
-}
-
-// MARK: - Design Tokens (Redesigned - MangaDex Style)
+// MARK: - Design Tokens
 struct ZTheme {
-    // الخلفيات
     static let bg      = Color(hex: "#0F1117")
     static let surface = Color(hex: "#161B27")
     static let card    = Color(hex: "#1C2333")
     static let cardHover = Color(hex: "#212A3E")
-
-    // الحدود
     static let border  = Color(hex: "#2A3347")
     static let borderLight = Color(hex: "#334166")
-
-    // اللون الأساسي (أزرق MangaDex)
     static let accent  = Color(hex: "#4F79D4")
     static let accentBright = Color(hex: "#6B93F0")
     static let accentDim = Color(hex: "#4F79D4").opacity(0.15)
-
-    // نصوص
     static let textPrimary   = Color(hex: "#E8ECF4")
     static let textSecondary = Color(hex: "#8895AA")
     static let textTertiary  = Color(hex: "#4A5568")
-
-    // حالات
     static let danger  = Color(hex: "#E85A6A")
     static let success = Color(hex: "#4CAF82")
     static let warning = Color(hex: "#E8A84F")
-
-    // تدرجات
     static let cardGradient = LinearGradient(
         colors: [Color(hex: "#1C2333"), Color(hex: "#161B27")],
         startPoint: .topLeading, endPoint: .bottomTrailing
