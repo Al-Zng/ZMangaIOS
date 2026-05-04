@@ -35,7 +35,7 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaDetail(html: html, slug: slug)
     }
 
-    // MARK: - Fetch Chapter Pages (Fixed)
+    // MARK: - Fetch Chapter Pages
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
         let html = try await fetchHTML(from: url)
@@ -143,7 +143,7 @@ class MangaService: NSObject, ObservableObject {
         return results
     }
 
-    // MARK: - Parse Manga Detail (unchanged)
+    // MARK: - Parse Manga Detail
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"#, in: html) ?? ""
@@ -195,14 +195,11 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (إصلاح الاستخراج)
+    // MARK: - Parse Chapter Pages
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
-
-        // نمط يلتقط جميع الصور التي تحمل class يحتوي على "wp-manga-chapter-img"
         let pattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#
         let ns = html as NSString
-
         if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
             regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 if let match = match, match.numberOfRanges >= 2 {
@@ -211,8 +208,6 @@ class MangaService: NSObject, ObservableObject {
                 }
             }
         }
-
-        // خطة احتياطية: أي img مع class يحمل الكلمة
         if pages.isEmpty {
             let fallbackPattern = #"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]+(?:src|data-src)="([^"]+)""#
             if let regex = try? NSRegularExpression(pattern: fallbackPattern, options: [.dotMatchesLineSeparators]) {
@@ -224,7 +219,6 @@ class MangaService: NSObject, ObservableObject {
                 }
             }
         }
-
         return pages
     }
 
@@ -253,11 +247,6 @@ class MangaService: NSObject, ObservableObject {
            .replacingOccurrences(of: "&nbsp;", with: " ")
            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
-}
-
-// MARK: - AppStore Current Store Reference
-extension AppStore {
-    static weak var currentStore: AppStore?
 }
 
 // MARK: - Errors
