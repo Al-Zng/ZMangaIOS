@@ -1,0 +1,45 @@
+name: Build ZManga (iOS)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build (unsigned) for device SDK
+        run: |
+          set -e
+          xcodebuild -project ZManga.xcodeproj \
+            -scheme ZManga \
+            -configuration Release \
+            -sdk iphoneos \
+            BUILD_DIR="$(pwd)/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+          APP_PATH="$(pwd)/build/Release-iphoneos/ZManga.app"
+          echo "App path: $APP_PATH"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: App not found"; ls -la build || true; exit 1
+          fi
+
+          rm -rf Payload ZManga_unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r ZManga_unsigned.ipa Payload
+          ls -lh ZManga_unsigned.ipa
+
+      - name: Upload unsigned .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZManga-unsigned.ipa
+          path: ZManga_unsigned.ipa
