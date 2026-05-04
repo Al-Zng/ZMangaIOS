@@ -12,16 +12,13 @@ struct CloudflareSheet: View {
                 ZTheme.bg.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // Header explanation
                     VStack(spacing: 8) {
                         Image(systemName: "shield.lefthalf.filled")
                             .font(.system(size: 32, weight: .light))
                             .foregroundColor(ZTheme.accent)
-
                         Text("Security Check")
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundColor(ZTheme.textPrimary)
-
                         Text("Complete the verification below to continue")
                             .font(.system(size: 13))
                             .foregroundColor(ZTheme.textSecondary)
@@ -33,7 +30,6 @@ struct CloudflareSheet: View {
 
                     Divider().background(ZTheme.border)
 
-                    // WebView
                     if let url = store.cloudflareURL {
                         CloudflareWebViewRepresentable(url: url) {
                             store.cookiesReady = true
@@ -63,6 +59,22 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        let userContentController = WKUserContentController()
+        // إضافة مُعالج رسائل من JavaScript
+        userContentController.add(context.coordinator, name: "cloudflareDone")
+        // JavaScript يراقب اختفاء تحدي Cloudflare ويُعلم التطبيق
+        let script = """
+        setInterval(function() {
+            if (!document.getElementById('cf-challenge-running') &&
+                !document.querySelector('.cf-browser-verification') &&
+                document.readyState === 'complete' &&
+                document.title.indexOf('Just a moment') === -1) {
+                window.webkit.messageHandlers.cloudflareDone.postMessage('done');
+            }
+        }, 1000);
+        """
+        userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        config.userContentController = userContentController
         config.websiteDataStore = WKWebsiteDataStore.default()
 
         let webView = WKWebView(frame: .zero, configuration: config)
@@ -83,37 +95,41 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
         Coordinator(onSuccess: onSuccess)
     }
 
-    class Coordinator: NSObject, WKNavigationDelegate {
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let onSuccess: () -> Void
-        private var successTimer: Timer?
+        var hasCompleted = false
 
         init(onSuccess: @escaping () -> Void) {
             self.onSuccess = onSuccess
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            // Check if we passed Cloudflare (page loaded normally)
+            // فحص إضافي عن طريق JavaScript بشكل فوري
             webView.evaluateJavaScript("document.title") { result, _ in
-                let title = result as? String ?? ""
-                let isCloudflare = title.contains("Just a moment") ||
-                                   title.contains("Attention Required") ||
-                                   title.contains("Checking your browser")
-                if !isCloudflare {
-                    // Copy cookies to HTTPCookieStorage
-                    WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-                        for cookie in cookies {
-                            HTTPCookieStorage.shared.setCookie(cookie)
-                        }
-                        DispatchQueue.main.async {
-                            self.onSuccess()
-                        }
-                    }
+                if let title = result as? String,
+                   !title.contains("Just a moment") && !title.contains("Attention Required") {
+                    self.transferCookiesAndDismiss(webView)
                 }
             }
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            // Ignore cancellation errors
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "cloudflareDone", let webView = message.webView {
+                transferCookiesAndDismiss(webView)
+            }
+        }
+
+        private func transferCookiesAndDismiss(_ webView: WKWebView) {
+            guard !hasCompleted else { return }
+            hasCompleted = true
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                for cookie in cookies {
+                    HTTPCookieStorage.shared.setCookie(cookie)
+                }
+                DispatchQueue.main.async {
+                    self.onSuccess()
+                }
+            }
         }
     }
 }
