@@ -51,7 +51,7 @@ struct Chapter: Identifiable, Codable, Hashable {
 
 // MARK: - Reading Progress
 struct ReadingProgress: Identifiable, Codable {
-    var id = UUID()          // ← أُضيف هذا السطر فقط لجعل ReadingProgress متوافقاً مع Identifiable
+    var id = UUID()
     var mangaSlug: String
     var mangaTitle: String
     var mangaCover: String
@@ -73,13 +73,14 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - AppStore (Global State)
+// MARK: - AppStore
 class AppStore: ObservableObject {
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var showCloudflareSheet = false
     @Published var cloudflareURL: URL? = nil
     @Published var cookiesReady = false
+    @Published var reloadTrigger = 0  // للـ reload بعد حل الـ challenge
 
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
@@ -89,7 +90,6 @@ class AppStore: ObservableObject {
         loadLibrary()
     }
 
-    // MARK: - History
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
         history.insert(progress, at: 0)
@@ -114,7 +114,6 @@ class AppStore: ObservableObject {
         history = decoded
     }
 
-    // MARK: - Library
     func addToLibrary(_ manga: Manga) {
         guard !library.contains(where: { $0.slug == manga.slug }) else { return }
         library.insert(manga, at: 0)
@@ -142,25 +141,69 @@ class AppStore: ObservableObject {
         library = decoded
     }
 
-    // MARK: - Cloudflare
     func triggerCloudflare(url: URL) {
         cloudflareURL = url
         showCloudflareSheet = true
     }
+
+    // يُطلق بعد حل الـ challenge لإعادة التحميل
+    func triggerReload() {
+        reloadTrigger += 1
+    }
 }
 
-// MARK: - Design Tokens
+// MARK: - AppStore Static Reference
+extension AppStore {
+    static weak var currentStore: AppStore?
+}
+
+// MARK: - Errors
+enum ZMangaError: LocalizedError {
+    case cloudflareChallenge
+    case parsingFailed
+    case networkError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .cloudflareChallenge: return "Cloudflare verification required"
+        case .parsingFailed: return "Failed to parse content"
+        case .networkError(let msg): return msg
+        }
+    }
+}
+
+// MARK: - Design Tokens (Redesigned - MangaDex Style)
 struct ZTheme {
-    static let bg = Color(hex: "#0A0A0C")
-    static let surface = Color(hex: "#111114")
-    static let card = Color(hex: "#18181C")
-    static let border = Color(hex: "#2A2A2E")
-    static let accent = Color(hex: "#E8C97A")
-    static let accentDim = Color(hex: "#E8C97A").opacity(0.15)
-    static let textPrimary = Color(hex: "#F2F2F4")
-    static let textSecondary = Color(hex: "#8A8A90")
-    static let textTertiary = Color(hex: "#55555C")
-    static let danger = Color(hex: "#E85A5A")
+    // الخلفيات
+    static let bg      = Color(hex: "#0F1117")
+    static let surface = Color(hex: "#161B27")
+    static let card    = Color(hex: "#1C2333")
+    static let cardHover = Color(hex: "#212A3E")
+
+    // الحدود
+    static let border  = Color(hex: "#2A3347")
+    static let borderLight = Color(hex: "#334166")
+
+    // اللون الأساسي (أزرق MangaDex)
+    static let accent  = Color(hex: "#4F79D4")
+    static let accentBright = Color(hex: "#6B93F0")
+    static let accentDim = Color(hex: "#4F79D4").opacity(0.15)
+
+    // نصوص
+    static let textPrimary   = Color(hex: "#E8ECF4")
+    static let textSecondary = Color(hex: "#8895AA")
+    static let textTertiary  = Color(hex: "#4A5568")
+
+    // حالات
+    static let danger  = Color(hex: "#E85A6A")
+    static let success = Color(hex: "#4CAF82")
+    static let warning = Color(hex: "#E8A84F")
+
+    // تدرجات
+    static let cardGradient = LinearGradient(
+        colors: [Color(hex: "#1C2333"), Color(hex: "#161B27")],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
 }
 
 extension Color {
@@ -170,19 +213,12 @@ extension Color {
         Scanner(string: h).scanHexInt64(&int)
         let a, r, g, b: UInt64
         switch h.count {
-        case 3:
-            (a, r, g, b) = (255, (int >> 8)*17, (int >> 4 & 0xF)*17, (int & 0xF)*17)
-        case 6:
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 0, 0, 0)
+        case 3:  (a, r, g, b) = (255, (int >> 8)*17, (int >> 4 & 0xF)*17, (int & 0xF)*17)
+        case 6:  (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:  (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default: (a, r, g, b) = (255, 0, 0, 0)
         }
-        self.init(.sRGB,
-                  red: Double(r)/255,
-                  green: Double(g)/255,
-                  blue: Double(b)/255,
-                  opacity: Double(a)/255)
+        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255,
+                  blue: Double(b)/255, opacity: Double(a)/255)
     }
 }
