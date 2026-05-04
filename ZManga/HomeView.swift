@@ -11,7 +11,7 @@ struct HomeView: View {
     @State private var popularPage = 1
     @State private var loadingMoreLatest = false
 
-    let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    let columns = [GridItem(.adaptive(minimum: 120))]
 
     var body: some View {
         NavigationView {
@@ -36,7 +36,7 @@ struct HomeView: View {
                         .padding(.horizontal, 20)
                         .padding(.top, 8)
 
-                        // Continue Reading (if history exists)
+                        // Continue Reading
                         if !store.history.isEmpty {
                             continueReadingSection
                         }
@@ -45,7 +45,7 @@ struct HomeView: View {
                         sectionHeader("Popular")
                         popularSection
 
-                        // Latest
+                        // Latest Updates
                         sectionHeader("Latest Updates")
                         latestSection
 
@@ -63,11 +63,9 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Continue Reading
     var continueReadingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("Continue Reading")
-
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(store.history.prefix(10)) { progress in
@@ -81,7 +79,6 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Popular Section
     var popularSection: some View {
         Group {
             if isLoadingPopular {
@@ -102,7 +99,6 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Latest Section
     var latestSection: some View {
         Group {
             if isLoadingLatest {
@@ -139,7 +135,6 @@ struct HomeView: View {
             .padding(.horizontal, 20)
     }
 
-    // MARK: - Load Data
     func loadAll() async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await loadLatest(reset: true) }
@@ -190,7 +185,6 @@ struct HomeView: View {
 // MARK: - Continue Reading Card
 struct ContinueReadingCard: View {
     let progress: ReadingProgress
-
     var body: some View {
         ZStack(alignment: .bottom) {
             AsyncImage(url: URL(string: progress.mangaCover)) { phase in
@@ -228,7 +222,6 @@ struct ContinueReadingCard: View {
 // MARK: - Manga Card Vertical (Horizontal scroll)
 struct MangaCardVertical: View {
     let manga: Manga
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             AsyncImage(url: URL(string: manga.coverURL)) { phase in
@@ -259,13 +252,14 @@ struct MangaCardVertical: View {
 // MARK: - Manga Grid Card
 struct MangaGridCard: View {
     let manga: Manga
-
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             AsyncImage(url: URL(string: manga.coverURL)) { phase in
                 switch phase {
                 case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
                 case .failure:
                     ZTheme.card.overlay(
                         Image(systemName: "photo").foregroundColor(ZTheme.textTertiary)
