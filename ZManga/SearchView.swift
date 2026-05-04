@@ -14,7 +14,7 @@ struct SearchView: View {
 
     let genres = ["درامـا", "رومانسى", "فانتازا", "أكشن", "كوميدى", "رعب", "خيال علمى", "مغامرات", "رياضة"]
 
-    let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
     var body: some View {
         NavigationView {
@@ -119,11 +119,12 @@ struct SearchView: View {
 
     var resultsGrid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(results) { manga in
                     NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
-                        MangaGridCard(manga: manga)
+                        LatestGridCard(manga: manga)   // ← استبدلنا MangaGridCard بـ LatestGridCard
                     }
+                    .buttonStyle(PlainButtonStyle())
                     .onAppear {
                         if manga.id == results.last?.id && !loadingMore && hasMore {
                             loadMore()
@@ -192,7 +193,6 @@ struct SearchView: View {
         hasMore = true
         results = []
         isLoading = true
-        // Encode genre for URL
         let encoded = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? genre
         Task {
             do {
