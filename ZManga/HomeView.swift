@@ -220,7 +220,7 @@ struct HomeView: View {
         Group {
             if latestManga.isEmpty && isLoadingLatest {
                 VStack(spacing: 10) {
-                    ForEach(0..<6, id: \.self) { _ {
+                    ForEach(0..<6, id: \.self) { _ in
                         SkeletonLatestRow()
                     }
                 }
