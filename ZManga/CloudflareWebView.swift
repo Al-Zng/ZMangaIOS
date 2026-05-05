@@ -39,7 +39,6 @@ struct CloudflareSheet: View {
                         CloudflareWebViewRepresentable(url: url) {
                             store.cookiesReady = true
                             store.showCloudflareSheet = false
-                            // إعادة تحميل البيانات تلقائياً بعد حل الـ challenge
                             store.triggerReload()
                             onDismiss()
                         }
@@ -51,6 +50,24 @@ struct CloudflareSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         store.showCloudflareSheet = false
+                    }
+                    .foregroundColor(ZTheme.accent)
+                }
+                // زر يدوي لإغلاق النافذة بعد إتمام التحدي
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        // ينقل الكوكيز ثم يغلق ويعيد التحميل
+                        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                            for cookie in cookies {
+                                HTTPCookieStorage.shared.setCookie(cookie)
+                            }
+                            DispatchQueue.main.async {
+                                store.cookiesReady = true
+                                store.showCloudflareSheet = false
+                                store.triggerReload()
+                                onDismiss()
+                            }
+                        }
                     }
                     .foregroundColor(ZTheme.accent)
                 }
@@ -69,25 +86,37 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
         let userContentController = WKUserContentController()
         userContentController.add(context.coordinator, name: "cloudflareDone")
 
-        // Script أقوى: ينتظر اختفاء جميع علامات الـ challenge
+        // JavaScript محسّن: يراقب اختفاء عناصر التحدي عبر MutationObserver
         let script = """
-        var _cfCheckCount = 0;
-        var _cfInterval = setInterval(function() {
-            _cfCheckCount++;
-            var hasChallenge = (
-                document.getElementById('cf-challenge-running') ||
-                document.querySelector('.cf-browser-verification') ||
-                document.querySelector('#challenge-running') ||
-                document.querySelector('#challenge-form') ||
-                document.title.indexOf('Just a moment') !== -1 ||
-                document.title.indexOf('Attention Required') !== -1
-            );
-            if (!hasChallenge && document.readyState === 'complete' && _cfCheckCount > 2) {
-                clearInterval(_cfInterval);
-                window.webkit.messageHandlers.cloudflareDone.postMessage('done');
+        (function() {
+            var hasCompleted = false;
+            function checkAndFire() {
+                if (hasCompleted) return;
+                var challengeElements = document.querySelectorAll(
+                    '#cf-challenge-running, .cf-browser-verification, #challenge-running, #challenge-form, [data-translate="complete_verification"]'
+                );
+                var isChallengeTitle = document.title.indexOf('Just a moment') !== -1 ||
+                                       document.title.indexOf('Attention Required') !== -1 ||
+                                       document.title.indexOf('Checking your browser') !== -1;
+                if (challengeElements.length === 0 && !isChallengeTitle && document.readyState === 'complete') {
+                    // انتظر قليلاً وتأكد مرة أخرى
+                    setTimeout(function() {
+                        challengeElements = document.querySelectorAll(
+                            '#cf-challenge-running, .cf-browser-verification, #challenge-running, #challenge-form'
+                        );
+                        if (challengeElements.length === 0) {
+                            hasCompleted = true;
+                            window.webkit.messageHandlers.cloudflareDone.postMessage('done');
+                        }
+                    }, 1500);
+                }
             }
-            if (_cfCheckCount > 30) { clearInterval(_cfInterval); }
-        }, 1500);
+            setInterval(checkAndFire, 2000);
+            var observer = new MutationObserver(function() {
+                checkAndFire();
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true });
+        })();
         """
         userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         config.userContentController = userContentController
@@ -124,15 +153,15 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             navigationCount += 1
-            // انتظر ثانية ثم تحقق من العنوان (أعطِ الـ JS وقت)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                webView.evaluateJavaScript("document.title") { [weak self] result, _ in
-                    guard let self = self, !self.hasCompleted else { return }
-                    if let title = result as? String,
-                       !title.contains("Just a moment") &&
-                       !title.contains("Attention Required") &&
-                       !title.isEmpty &&
-                       self.navigationCount > 1 {
+            // فحص إضافي بعد كل تحميل (احتياط)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self = self, !self.hasCompleted else { return }
+                webView.evaluateJavaScript("document.title") { result, _ in
+                    let title = result as? String ?? ""
+                    let isCloudflare = title.contains("Just a moment") ||
+                                       title.contains("Attention Required") ||
+                                       title.contains("Checking your browser")
+                    if !isCloudflare && !title.isEmpty && self.navigationCount > 1 {
                         self.transferCookiesAndDismiss(webView)
                     }
                 }
@@ -141,8 +170,8 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "cloudflareDone", let webView = message.webView {
-                // تأخير بسيط للتأكد من حفظ الـ cookies
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // تأكيد ونقل الكوكيز
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self.transferCookiesAndDismiss(webView)
                 }
             }
