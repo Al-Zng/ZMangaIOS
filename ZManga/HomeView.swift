@@ -4,8 +4,8 @@ struct HomeView: View {
     @EnvironmentObject var store: AppStore
     @State private var latestManga: [Manga] = []
     @State private var popularManga: [Manga] = []
-    @State private var isLoadingLatest = true
-    @State private var isLoadingPopular = true
+    @State private var isLoadingLatest = false
+    @State private var isLoadingPopular = false
     @State private var latestPage = 1
     @State private var loadingMoreLatest = false
 
@@ -31,12 +31,23 @@ struct HomeView: View {
                         Color.clear.frame(height: 32)
                     }
                 }
-                .refreshable { await loadAll() }
+                .refreshable {
+                    await loadLatest(reset: true)
+                    await loadPopular()
+                }
             }
             .navigationBarHidden(true)
         }
-        .task { await loadAll() }
-        .onChange(of: store.reloadTrigger) { _ in Task { await loadAll() } }
+        .task {
+            await loadLatest(reset: false)
+            await loadPopular()
+        }
+        .onChange(of: store.reloadTrigger) { _ in
+            Task {
+                await loadLatest(reset: true)
+                await loadPopular()
+            }
+        }
     }
 
     // MARK: - Header
@@ -94,7 +105,7 @@ struct HomeView: View {
     // MARK: - Popular
     var popularSection: some View {
         Group {
-            if isLoadingPopular {
+            if isLoadingPopular && popularManga.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(0..<6, id: \.self) { _ in SkeletonPopularCard() }
@@ -117,58 +128,64 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Latest (مع عناصر وهمية بنفس الارتفاع)
+    // MARK: - Latest (تجنب القفز بعدم مسح المصفوفة)
     var latestSection: some View {
-        LazyVStack(spacing: 12) {
-            ForEach(latestManga) { manga in
-                if manga.isPlaceholder {
-                    SkeletonLatestRow()
-                        .frame(height: 122) // نفس ارتفاع الصف الحقيقي
-                } else {
-                    NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
-                        LatestUpdateRow(manga: manga)
+        Group {
+            if latestManga.isEmpty && isLoadingLatest {
+                VStack(spacing: 12) {
+                    ForEach(0..<8, id: \.self) { _ in
+                        SkeletonLatestRow()
+                            .frame(height: 122)
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .onAppear {
-                        if manga.id == latestManga.last?.id && !loadingMoreLatest {
-                            Task { await loadMoreLatest() }
+                }
+                .padding(.horizontal, 16)
+            } else {
+                VStack(spacing: 0) {
+                    if isLoadingLatest {
+                        ProgressView()
+                            .tint(ZTheme.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    LazyVStack(spacing: 12) {
+                        ForEach(latestManga) { manga in
+                            NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
+                                LatestUpdateRow(manga: manga)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .onAppear {
+                                if manga.id == latestManga.last?.id && !loadingMoreLatest {
+                                    Task { await loadMoreLatest() }
+                                }
+                            }
                         }
                     }
                 }
+                .padding(.horizontal, 16)
+
+                if loadingMoreLatest {
+                    HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
+                        .padding(.vertical, 16)
+                }
             }
         }
-        .padding(.horizontal, 16)
-
-        if loadingMoreLatest {
-            HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
-                .padding(.vertical, 16)
-        }
     }
 
-    // MARK: - Fetch Logic
-    func loadAll() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await loadLatest(reset: true) }
-            group.addTask { await loadPopular() }
-        }
-    }
-
+    // MARK: - Fetch Logic (لا تمسح البيانات عند التحديث)
     func loadLatest(reset: Bool = false) async {
         if reset {
-            latestPage = 1
-            let placeholders = (0..<8).map { i in
-                Manga(slug: "placeholder-\(i)", title: "", isPlaceholder: true)
-            }
             await MainActor.run {
-                latestManga = placeholders
+                latestPage = 1
                 isLoadingLatest = true
             }
+        } else if latestManga.isEmpty {
+            await MainActor.run { isLoadingLatest = true }
         }
 
         do {
             let items = try await MangaService.shared.fetchLatest(page: latestPage)
             await MainActor.run {
-                if reset {
+                if reset || latestManga.isEmpty {
                     latestManga = items
                 } else {
                     latestManga.append(contentsOf: items)
@@ -176,10 +193,7 @@ struct HomeView: View {
                 isLoadingLatest = false
             }
         } catch {
-            await MainActor.run {
-                if reset { latestManga = [] }
-                isLoadingLatest = false
-            }
+            await MainActor.run { isLoadingLatest = false }
         }
     }
 
@@ -187,12 +201,22 @@ struct HomeView: View {
         guard !loadingMoreLatest else { return }
         await MainActor.run { loadingMoreLatest = true }
         latestPage += 1
-        await loadLatest(reset: false)
-        await MainActor.run { loadingMoreLatest = false }
+        let old = latestManga
+        do {
+            let items = try await MangaService.shared.fetchLatest(page: latestPage)
+            await MainActor.run {
+                latestManga = old + items
+                loadingMoreLatest = false
+            }
+        } catch {
+            await MainActor.run { loadingMoreLatest = false }
+        }
     }
 
     func loadPopular() async {
-        await MainActor.run { isLoadingPopular = true }
+        if popularManga.isEmpty {
+            await MainActor.run { isLoadingPopular = true }
+        }
         do {
             let items = try await MangaService.shared.fetchPopular()
             await MainActor.run {
