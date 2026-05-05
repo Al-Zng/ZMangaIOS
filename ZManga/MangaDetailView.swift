@@ -52,9 +52,26 @@ struct MangaDetailView: View {
             }
         }
         .fullScreenCover(isPresented: $showReader) {
-            if let chapter = selectedChapter, let manga = manga {
-                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
-                    .environmentObject(store)
+            Group {
+                if let chapter = selectedChapter, let manga = manga {
+                    ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
+                        .environmentObject(store)
+                } else {
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+                        VStack(spacing: 20) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 44, weight: .ultraLight))
+                                .foregroundColor(ZTheme.danger)
+                            Text("Something went wrong")
+                                .foregroundColor(.white)
+                            Button("Go Back") {
+                                showReader = false
+                            }
+                            .foregroundColor(ZTheme.accent)
+                        }
+                    }
+                }
             }
         }
         .task { await loadDetail() }
@@ -178,7 +195,6 @@ struct MangaDetailView: View {
                     }
                 }
 
-                // زر القراءة
                 if let first = manga.chapters.max(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) {
                     Button {
                         let target = manga.chapters.min(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) ?? first
@@ -271,7 +287,7 @@ struct MangaDetailView: View {
     }
 }
 
-// MARK: - Chapter Row (الأصلي تماماً)
+// MARK: - Chapter Row
 struct ChapterRow: View {
     let chapter: Chapter
     let manga: Manga
