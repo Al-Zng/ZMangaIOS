@@ -12,6 +12,7 @@ struct MangaDetailView: View {
     @State private var selectedChapter: Chapter? = nil
     @State private var showReader = false
     @State private var chapterSortAsc = false
+    @State private var showChapterError = false
 
     var sortedChapters: [Chapter] {
         guard let m = manga else { return [] }
@@ -71,6 +72,11 @@ struct MangaDetailView: View {
                     }
                 }
             }
+        }
+        .alert("No Chapter Available", isPresented: $showChapterError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("This manga has no readable chapters yet.")
         }
         .task { await loadDetail() }
     }
@@ -132,7 +138,12 @@ struct MangaDetailView: View {
                             manga: manga,
                             progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug }
                         ) {
-                            selectedChapter = chapter
+                            // تأكيد أن الفصل موجود فعلاً في القائمة
+                            guard let realChapter = manga.chapters.first(where: { $0.id == chapter.id }) else {
+                                showChapterError = true
+                                return
+                            }
+                            selectedChapter = realChapter
                             showReader = true
                         }
                         Divider().background(ZTheme.border).padding(.leading, 16)
@@ -193,11 +204,17 @@ struct MangaDetailView: View {
                     }
                 }
 
-                if let first = manga.chapters.max(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) {
+                // زر القراءة مع تحقق إضافي
+                if let firstChapter = manga.chapters.max(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) {
                     Button {
-                        let target = manga.chapters.min(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) ?? first
+                        guard !manga.chapters.isEmpty else {
+                            showChapterError = true
+                            return
+                        }
+                        let target = manga.chapters.min(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) ?? firstChapter
                         if let progress = store.history.first(where: { $0.mangaSlug == manga.slug }) {
-                            selectedChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) ?? target
+                            let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) ?? target
+                            selectedChapter = historyChapter
                         } else {
                             selectedChapter = target
                         }
@@ -215,6 +232,11 @@ struct MangaDetailView: View {
                         .background(ZTheme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
+                } else {
+                    Text("No chapters available")
+                        .font(.system(size: 13))
+                        .foregroundColor(ZTheme.textSecondary)
+                        .padding(.vertical, 8)
                 }
             }
             Spacer()
@@ -285,7 +307,7 @@ struct MangaDetailView: View {
     }
 }
 
-// MARK: - Chapter Row
+// MARK: - Chapter Row (تأكد من وجودها في الملف)
 struct ChapterRow: View {
     let chapter: Chapter
     let manga: Manga
