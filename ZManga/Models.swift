@@ -94,6 +94,7 @@ struct ReadingProgress: Identifiable, Codable {
 // MARK: - AppStore
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
+
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var showCloudflareSheet = false
@@ -104,7 +105,10 @@ class AppStore: ObservableObject {
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
 
-    init() { loadHistory(); loadLibrary() }
+    init() {
+        loadHistory()
+        loadLibrary()
+    }
 
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
@@ -112,33 +116,59 @@ class AppStore: ObservableObject {
         if history.count > 200 { history = Array(history.prefix(200)) }
         persistHistory()
     }
-    func clearHistory() { history.removeAll(); persistHistory() }
-    private func persistHistory() {
-        if let data = try? JSONEncoder().encode(history) { UserDefaults.standard.set(data, forKey: historyKey) }
+
+    func clearHistory() {
+        history.removeAll()
+        persistHistory()
     }
+
+    private func persistHistory() {
+        if let data = try? JSONEncoder().encode(history) {
+            UserDefaults.standard.set(data, forKey: historyKey)
+        }
+    }
+
     private func loadHistory() {
         guard let data = UserDefaults.standard.data(forKey: historyKey),
               let decoded = try? JSONDecoder().decode([ReadingProgress].self, from: data) else { return }
         history = decoded
     }
+
     func addToLibrary(_ manga: Manga) {
         guard !library.contains(where: { $0.slug == manga.slug }) else { return }
-        library.insert(manga, at: 0); persistLibrary()
+        library.insert(manga, at: 0)
+        persistLibrary()
     }
+
     func removeFromLibrary(_ manga: Manga) {
-        library.removeAll { $0.slug == manga.slug }; persistLibrary()
+        library.removeAll { $0.slug == manga.slug }
+        persistLibrary()
     }
-    func isInLibrary(_ manga: Manga) -> Bool { library.contains { $0.slug == manga.slug } }
+
+    func isInLibrary(_ manga: Manga) -> Bool {
+        library.contains { $0.slug == manga.slug }
+    }
+
     private func persistLibrary() {
-        if let data = try? JSONEncoder().encode(library) { UserDefaults.standard.set(data, forKey: libraryKey) }
+        if let data = try? JSONEncoder().encode(library) {
+            UserDefaults.standard.set(data, forKey: libraryKey)
+        }
     }
+
     private func loadLibrary() {
         guard let data = UserDefaults.standard.data(forKey: libraryKey),
               let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
         library = decoded
     }
-    func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
-    func triggerReload() { reloadTrigger += 1 }
+
+    func triggerCloudflare(url: URL) {
+        cloudflareURL = url
+        showCloudflareSheet = true
+    }
+
+    func triggerReload() {
+        reloadTrigger += 1
+    }
 }
 
 // MARK: - Design Tokens
@@ -163,66 +193,106 @@ struct ZTheme {
 extension Color {
     init(hex: String) {
         let h = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0; Scanner(string: h).scanHexInt64(&int)
+        var int: UInt64 = 0
+        Scanner(string: h).scanHexInt64(&int)
         let a, r, g, b: UInt64
         switch h.count {
         case 3:  (a, r, g, b) = (255, (int >> 8)*17, (int >> 4 & 0xF)*17, (int & 0xF)*17)
         case 6:  (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
         case 8:  (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default: (a, r, g, b) = (255,0,0,0)
+        default: (a, r, g, b) = (255, 0, 0, 0)
         }
-        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
+        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255,
+                  blue: Double(b)/255, opacity: Double(a)/255)
     }
 }
 
-// MARK: - CachedAsyncImage (نهائي مع Referer وإعادة)
+// MARK: - Cached Async Image (Final, with Referer and retry)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var isLoading = true
-    @State private var failed = false
+    @State private var loadFailed = false
     @State private var attempt = 0
 
-    private static let cache = URLCache(memoryCapacity: 80*1024*1024, diskCapacity: 400*1024*1024)
+    private static let cache = URLCache(
+        memoryCapacity: 80 * 1024 * 1024,
+        diskCapacity: 400 * 1024 * 1024,
+        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    )
 
     var body: some View {
         Group {
-            if let img = image {
-                Image(uiImage: img).resizable().interpolation(.high).antialiased(true)
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
             } else if isLoading && attempt < 3 {
-                Rectangle().fill(Color(white:0.12)).overlay(ProgressView().tint(ZTheme.accent))
+                Rectangle()
+                    .fill(Color(white: 0.12))
+                    .overlay(ProgressView().tint(ZTheme.accent))
             } else {
-                Rectangle().fill(Color(white:0.12)).overlay(Image(systemName:"photo").font(.title2).foregroundColor(.gray))
+                Rectangle()
+                    .fill(Color(white: 0.12))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundColor(ZTheme.textTertiary)
+                    )
             }
         }
-        .task(id: url?.absoluteString) { await load() }
+        .task(id: url?.absoluteString) {
+            await loadImage()
+        }
     }
 
-    private func load() async {
-        guard let url = url else { isLoading=false; failed=true; return }
-        let urlStr = url.absoluteString.lowercased()
-        if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") || urlStr.contains("/favicon") {
-            isLoading=false; failed=true; return
+    private func loadImage() async {
+        guard let url = url else {
+            isLoading = false
+            loadFailed = true
+            return
         }
+        let urlStr = url.absoluteString.lowercased()
+        // Skip obvious site logos
+        if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
+           urlStr.contains("/favicon") {
+            isLoading = false
+            loadFailed = true
+            return
+        }
+
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.timeoutIntervalForRequest = 15
         let session = URLSession(configuration: config)
+
         for _ in 0..<3 {
             attempt += 1
-            var req = URLRequest(url: url)
-            req.setValue("https://lek-manga.net", forHTTPHeaderField: "Referer")
-            req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+            var request = URLRequest(url: url)
+            request.setValue("https://lek-manga.net", forHTTPHeaderField: "Referer")
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
             do {
-                let (data, resp) = try await session.data(for: req)
-                if let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                   let img = UIImage(data: data), img.size.width > 0 {
-                    await MainActor.run { image = img; isLoading = false }
+                let (data, response) = try await session.data(for: request)
+                if let httpResp = response as? HTTPURLResponse,
+                   httpResp.statusCode == 200,
+                   let img = UIImage(data: data),
+                   img.size.width > 0 {
+                    await MainActor.run {
+                        image = img
+                        isLoading = false
+                    }
                     return
                 }
-            } catch { try? await Task.sleep(nanoseconds: 500_000_000) }
+            } catch {
+                // retry after short delay
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
         }
-        await MainActor.run { failed = true; isLoading = false }
+        await MainActor.run {
+            loadFailed = true
+            isLoading = false
+        }
     }
 }
