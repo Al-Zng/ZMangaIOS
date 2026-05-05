@@ -15,11 +15,9 @@ struct Manga: Identifiable, Codable, Hashable {
     var author: String
     var artist: String
 
-    // New fields for latest updates
     var latestChapterNumber: String?
     var lastUpdated: String?
 
-    /// Returns the original image URL, removing common thumbnail size suffixes
     var highQualityCoverURL: String {
         let patterns = ["-110x150", "-150x200", "-200x300", "-300x450"]
         var url = coverURL
@@ -173,7 +171,7 @@ class AppStore: ObservableObject {
     }
 }
 
-// MARK: - Design Tokens (modern dark theme)
+// MARK: - Design Tokens
 struct ZTheme {
     static let bg      = Color(hex: "#121212")
     static let surface = Color(hex: "#1E1E1E")
@@ -206,5 +204,51 @@ extension Color {
         }
         self.init(.sRGB, red: Double(r)/255, green: Double(g)/255,
                   blue: Double(b)/255, opacity: Double(a)/255)
+    }
+}
+
+// MARK: - Cached Async Image (مدمج مع الكاش) – خارج extension Color تماماً
+struct CachedAsyncImage: View {
+    let url: URL?
+    @State private var image: UIImage?
+    @State private var isLoading = true
+
+    private static let cache = URLCache(
+        memoryCapacity: 50 * 1024 * 1024,
+        diskCapacity: 200 * 1024 * 1024,
+        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    )
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.urlCache = cache
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        return URLSession(configuration: config)
+    }()
+
+    var body: some View {
+        Group {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
+            } else if isLoading {
+                Rectangle()
+                    .fill(Color(white: 0.1))
+                    .overlay(ProgressView().tint(ZTheme.accent))
+            } else {
+                Rectangle()
+                    .fill(Color(white: 0.1))
+                    .overlay(Image(systemName: "photo").font(.title2).foregroundColor(.gray))
+            }
+        }
+        .task {
+            guard let url = url else { return }
+            do {
+                let (data, _) = try await session.data(from: url)
+                if let uiImage = UIImage(data: data) { image = uiImage }
+            } catch {}
+            isLoading = false
+        }
     }
 }
