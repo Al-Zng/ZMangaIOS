@@ -119,28 +119,30 @@ struct HomeView: View {
 
     // MARK: - Latest (مع عناصر وهمية ثابتة الهوية)
     var latestSection: some View {
-        LazyVStack(spacing: 12) {
-            ForEach(latestManga) { manga in
-                if manga.isPlaceholder {
-                    SkeletonLatestRow()
-                } else {
-                    NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
-                        LatestUpdateRow(manga: manga)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .onAppear {
-                        if manga.id == latestManga.last?.id && !loadingMoreLatest {
-                            Task { await loadMoreLatest() }
+        Group {
+            LazyVStack(spacing: 12) {
+                ForEach(latestManga) { manga in
+                    if manga.isPlaceholder {
+                        SkeletonLatestRow()
+                    } else {
+                        NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
+                            LatestUpdateRow(manga: manga)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .onAppear {
+                            if manga.id == latestManga.last?.id && !loadingMoreLatest {
+                                Task { await loadMoreLatest() }
+                            }
                         }
                     }
                 }
             }
-        }
-        .padding(.horizontal, 16)
+            .padding(.horizontal, 16)
 
-        if loadingMoreLatest {
-            HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
-                .padding(.vertical, 16)
+            if loadingMoreLatest {
+                HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
+                    .padding(.vertical, 16)
+            }
         }
     }
 
