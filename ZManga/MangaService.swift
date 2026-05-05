@@ -72,13 +72,13 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - Search
+    // MARK: - Search (بدون فلتر الغلاف)
     func search(query: String, page: Int = 1) async throws -> [Manga] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
         let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.coverURL.isEmpty && !$0.slug.contains("feed") && !$0.slug.isEmpty }
+            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty } // فقط إزالة الوهمية
     }
 
     // MARK: - Fetch Manga Detail
@@ -102,7 +102,7 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - Parse Manga List
+    // MARK: - Parse Manga List (يقبل الأغطية الفارغة)
     private func parseMangaList(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let cardPattern = #"<div class="page-item-detail[^"]*">(.*?)</div>\s*</div>\s*</div>"#
@@ -113,7 +113,7 @@ class MangaService: NSObject, ObservableObject {
             for match in matches.prefix(30) {
                 let block = nsHtml.substring(with: match.range)
                 if var manga = parseMangaCard(block) {
-                    if manga.coverURL.isEmpty || isLogoURL(manga.coverURL) { continue }
+                    if isLogoURL(manga.coverURL) { continue } // نتجاهل الشعارات فقط
                     if extractChapterInfo {
                         let info = parseLatestChapterInfo(from: block)
                         manga.latestChapterNumber = info.chapter
@@ -132,7 +132,7 @@ class MangaService: NSObject, ObservableObject {
     private func isLogoURL(_ url: String) -> Bool {
         let lower = url.lowercased()
         return lower.contains("lekmanga.png") || lower.contains("-512.png") ||
-               lower.contains("cropped") || lower.contains("favicon")
+               lower.contains("cropped-") || lower.contains("favicon")
     }
 
     private func parseMangaCard(_ block: String) -> Manga? {
@@ -257,29 +257,29 @@ class MangaService: NSObject, ObservableObject {
         var pages: [String] = []
         let ns = html as NSString
 
-        // البحث عن كل الصور داخل page-break أو reading-content بأي سمة src أو data-src
+        // تجميع المحتوى داخل page-break أو reading-content
         let containerPatterns = [
             #"<div[^>]*class="[^"]*page-break[^"]*"[^>]*>(.*?)</div>"#,
             #"<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>"#
         ]
-        var combinedBlocks = ""
+        var combined = ""
         for pattern in containerPatterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
                 regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                     if let match = match, match.numberOfRanges >= 2 {
-                        combinedBlocks += ns.substring(with: match.range(at: 1))
+                        combined += ns.substring(with: match.range(at: 1))
                     }
                 }
             }
         }
-        if combinedBlocks.isEmpty { combinedBlocks = html } // fallback
+        if combined.isEmpty { combined = html }
 
-        // استخرج جميع روابط src أو data-src من الصور
         let imgPattern = #"<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>"#
         if let regex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-            regex.enumerateMatches(in: combinedBlocks, range: NSRange(location: 0, length: (combinedBlocks as NSString).length)) { match, _, _ in
+            let cNs = combined as NSString
+            regex.enumerateMatches(in: combined, range: NSRange(location: 0, length: cNs.length)) { match, _, _ in
                 if let match = match, match.numberOfRanges >= 2 {
-                    let url = (combinedBlocks as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let url = cNs.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
                     if isValidImageURL(url) && !pages.contains(url) {
                         pages.append(url)
                     }
@@ -294,7 +294,7 @@ class MangaService: NSObject, ObservableObject {
         guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
         let lower = url.lowercased()
         if lower.contains("lekmanga.png") || lower.contains("-512.png") ||
-           lower.contains("cropped") || lower.contains("favicon") { return false }
+           lower.contains("cropped-") || lower.contains("favicon") { return false }
         return lower.contains(".jpg") || lower.contains(".jpeg") ||
                lower.contains(".png") || lower.contains(".webp")
     }
