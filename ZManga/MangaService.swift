@@ -8,8 +8,6 @@ class MangaService: NSObject, ObservableObject {
 
     // MARK: - WebView based HTML fetcher (يحل محل URLSession)
     private var webView: WKWebView?
-    private var pendingCompletions: [(Result<String, Error>) -> Void] = []
-    private var isLoading = false
 
     private func ensureWebView() -> WKWebView {
         if let wv = webView { return wv }
@@ -29,16 +27,14 @@ class MangaService: NSObject, ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
         // تحميل الصفحة (إذا لم تكن محملة مسبقًا)
-        if webView.url != url {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                webView.load(request)
-                // انتظر حتى ينتهي التحميل الأول
-                var observer: NSKeyValueObservation?
-                observer = webView.observe(\.isLoading, options: [.new]) { _, change in
-                    if change.newValue == false {
-                        observer?.invalidate()
-                        continuation.resume()
-                    }
+        webView.load(request)
+        // انتظر حتى ينتهي التحميل
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var observer: NSKeyValueObservation?
+            observer = webView.observe(\.isLoading, options: [.new]) { _, change in
+                if change.newValue == false {
+                    observer?.invalidate()
+                    continuation.resume()
                 }
             }
         }
@@ -249,5 +245,20 @@ class MangaService: NSObject, ObservableObject {
            .replacingOccurrences(of: "&#039;", with: "'")
            .replacingOccurrences(of: "&nbsp;", with: " ")
            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// إعادة ZMangaError المطلوبة
+enum ZMangaError: LocalizedError {
+    case cloudflareChallenge
+    case parsingFailed
+    case networkError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .cloudflareChallenge: return "Cloudflare verification required"
+        case .parsingFailed: return "Failed to parse content"
+        case .networkError(let msg): return msg
+        }
     }
 }
