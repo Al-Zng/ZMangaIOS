@@ -131,9 +131,8 @@ class MangaService: NSObject, ObservableObject {
 
     private func isLogoURL(_ url: String) -> Bool {
         let lower = url.lowercased()
-        return lower.contains("logo") || lower.contains("icon") ||
-               lower.contains("lekmanga.png") || lower.contains("512.png") ||
-               lower.contains("favicon") || lower.contains("cropped")
+        return lower.contains("lekmanga.png") || lower.contains("-512.png") ||
+               lower.contains("cropped") || lower.contains("favicon")
     }
 
     private func parseMangaCard(_ block: String) -> Manga? {
@@ -253,33 +252,39 @@ class MangaService: NSObject, ObservableObject {
                      author: author)
     }
 
-    // MARK: - Parse Chapter Pages (يدعم src و data-src مع تجاهل الشعارات)
+    // MARK: - Parse Chapter Pages (استخراج قوي لجميع الحالات)
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        let patterns = [
-            #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*data-src="([^"]+)"[^>]*>"#,
-            #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#,
-            #"<img[^>]*data-src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#,
-            #"<img[^>]*src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#,
-            // احتياطي: أي صورة داخل page-break
-            #"<div class="[^"]*page-break[^"]*">\s*<img[^>]+src="([^"]+)"[^>]*>"#,
-            #"<div class="[^"]*page-break[^"]*">\s*<img[^>]+data-src="([^"]+)"[^>]*>"#,
+        // البحث عن كل الصور داخل page-break أو reading-content بأي سمة src أو data-src
+        let containerPatterns = [
+            #"<div[^>]*class="[^"]*page-break[^"]*"[^>]*>(.*?)</div>"#,
+            #"<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>"#
         ]
-
-        for pattern in patterns {
+        var combinedBlocks = ""
+        for pattern in containerPatterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
                 regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                     if let match = match, match.numberOfRanges >= 2 {
-                        let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if isValidImageURL(url) && !pages.contains(url) {
-                            pages.append(url)
-                        }
+                        combinedBlocks += ns.substring(with: match.range(at: 1))
                     }
                 }
             }
-            if !pages.isEmpty { break }
+        }
+        if combinedBlocks.isEmpty { combinedBlocks = html } // fallback
+
+        // استخرج جميع روابط src أو data-src من الصور
+        let imgPattern = #"<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>"#
+        if let regex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            regex.enumerateMatches(in: combinedBlocks, range: NSRange(location: 0, length: (combinedBlocks as NSString).length)) { match, _, _ in
+                if let match = match, match.numberOfRanges >= 2 {
+                    let url = (combinedBlocks as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if isValidImageURL(url) && !pages.contains(url) {
+                        pages.append(url)
+                    }
+                }
+            }
         }
 
         return pages
@@ -288,9 +293,8 @@ class MangaService: NSObject, ObservableObject {
     private func isValidImageURL(_ url: String) -> Bool {
         guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
         let lower = url.lowercased()
-        if lower.contains("logo") || lower.contains("icon") ||
-           lower.contains("512.png") || lower.contains("favicon") ||
-           lower.contains("cropped") { return false }
+        if lower.contains("lekmanga.png") || lower.contains("-512.png") ||
+           lower.contains("cropped") || lower.contains("favicon") { return false }
         return lower.contains(".jpg") || lower.contains(".jpeg") ||
                lower.contains(".png") || lower.contains(".webp")
     }
