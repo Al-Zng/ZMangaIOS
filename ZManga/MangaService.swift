@@ -72,13 +72,13 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-func search(query: String, page: Int = 1) async throws -> [Manga] {
-    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-    let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
-    let html = try await fetchHTML(urlString: url)
-    return parseMangaList(html: html, extractChapterInfo: false)
-        .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
-}
+    func search(query: String, page: Int = 1) async throws -> [Manga] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
+        let html = try await fetchHTML(urlString: url)
+        return parseMangaList(html: html, extractChapterInfo: false)
+            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
+    }
 
     func fetchDetail(slug: String) async throws -> Manga {
         let url = "\(baseURL)/manga/\(slug)/"
@@ -109,7 +109,7 @@ func search(query: String, page: Int = 1) async throws -> [Manga] {
         for match in cardRegex.matches(in: html, range: range).prefix(30) {
             let block = nsHtml.substring(with: match.range)
             if var manga = parseMangaCard(block) {
-            if manga.coverURL.isEmpty || isLogoOnly(manga.coverURL) { continue }
+                if manga.coverURL.isEmpty || isLogoOnly(manga.coverURL) { continue }
                 if extractChapterInfo {
                     let info = parseLatestChapterInfo(from: block)
                     manga.latestChapterNumber = info.chapter
@@ -158,7 +158,8 @@ func search(query: String, page: Int = 1) async throws -> [Manga] {
                 let cover = firstCapture(pattern: #"<img[^>]+data-src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
                          ?? firstCapture(pattern: #"<img[^>]+src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
                          ?? ""
-                var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: isLogoOnly(cover) ? "" : cover)
+                var manga = Manga(slug: slug, title: htmlDecode(rawTitle),
+                                  coverURL: isLogoOnly(cover) ? "" : cover)
                 if extractChapterInfo {
                     let fullBlock = nsHtml.substring(with: match.range)
                     let info = parseLatestChapterInfo(from: fullBlock)
@@ -244,14 +245,15 @@ func search(query: String, page: Int = 1) async throws -> [Manga] {
                      author: author)
     }
 
-    // MARK: - Parse Chapter Pages (Final fix: data-src first, then src, whole page)
+    // MARK: - Parse Chapter Pages (Final, prefers data-src, filters logos)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // Capture all image URLs from the entire HTML, preferring data-src over src
-        let imgPattern = #"<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>"#
+        // 1) Collect all images that look like chapter pages.
+        //    Prefer data-src, then src.
+        let imgPattern = #"<img[^>]+\b(?:data-src|src)="([^"]+)"[^>]*>"#
         if let regex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
             regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
@@ -262,7 +264,7 @@ func search(query: String, page: Int = 1) async throws -> [Manga] {
             }
         }
 
-        // If no images found, try a more aggressive fallback (look for any image URL in the page)
+        // 2) If still empty, try to find any image URL in the page (fallback)
         if pages.isEmpty {
             let fallbackPattern = #"(?:data-src|src)="(https?://[^"]+\.(?:jpg|jpeg|png|webp))""#
             if let fRegex = try? NSRegularExpression(pattern: fallbackPattern, options: [.caseInsensitive]) {
