@@ -17,8 +17,8 @@ struct MangaDetailView: View {
     var sortedChapters: [Chapter] {
         guard let m = manga else { return [] }
         return chapterSortAsc
-            ? m.chapters.sorted { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }
-            : m.chapters.sorted { (Int($0.number) ?? 0) > (Int($1.number) ?? 0) }
+            ? m.chapters.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
+            : m.chapters.sorted { (Double($0.number) ?? 0) > (Double($1.number) ?? 0) }
     }
 
     var body: some View {
@@ -52,23 +52,22 @@ struct MangaDetailView: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showReader) {
-            Group {
-                if let chapter = selectedChapter, let manga = manga {
-                    ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
-                        .environmentObject(store)
-                } else {
-                    ZStack {
-                        Color.black.ignoresSafeArea()
-                        VStack(spacing: 20) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.system(size: 44, weight: .ultraLight))
-                                .foregroundColor(ZTheme.danger)
-                            Text("Chapter data missing")
-                                .foregroundColor(.white)
-                            Button("Close") { showReader = false }
-                                .foregroundColor(ZTheme.accent)
-                        }
+        // FIX: نفصل الـ sheet عن الـ state بحيث لا يُعرض إلا إذا selectedChapter موجود فعلاً
+        .fullScreenCover(item: $selectedChapter) { chapter in
+            if let manga = manga {
+                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
+                    .environmentObject(store)
+            } else {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    VStack(spacing: 20) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 44, weight: .ultraLight))
+                            .foregroundColor(ZTheme.danger)
+                        Text("Chapter data missing")
+                            .foregroundColor(.white)
+                        Button("Close") { selectedChapter = nil }
+                            .foregroundColor(ZTheme.accent)
                     }
                 }
             }
@@ -138,13 +137,12 @@ struct MangaDetailView: View {
                             manga: manga,
                             progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug }
                         ) {
-                            // تأكيد أن الفصل موجود فعلاً
-                            guard let realChapter = manga.chapters.first(where: { $0.id == chapter.id }) else {
+                            // FIX: مباشرة نعيّن الفصل - Identifiable يفتح الـ sheet
+                            guard !manga.chapters.isEmpty else {
                                 showChapterError = true
                                 return
                             }
-                            selectedChapter = realChapter
-                            showReader = true
+                            selectedChapter = chapter
                         }
                         Divider().background(ZTheme.border).padding(.leading, 16)
                     }
@@ -204,21 +202,19 @@ struct MangaDetailView: View {
                     }
                 }
 
-                // زر القراءة مع تحقق إضافي
-                if let firstChapter = manga.chapters.max(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) {
+                // FIX: زر البداية/الاستمرار - يعيّن selectedChapter مباشرة
+                if let firstChapter = manga.chapters.min(by: { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }) {
                     Button {
                         guard !manga.chapters.isEmpty else {
                             showChapterError = true
                             return
                         }
-                        let target = manga.chapters.min(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) ?? firstChapter
-                        if let progress = store.history.first(where: { $0.mangaSlug == manga.slug }) {
-                            let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) ?? target
+                        if let progress = store.history.first(where: { $0.mangaSlug == manga.slug }),
+                           let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) {
                             selectedChapter = historyChapter
                         } else {
-                            selectedChapter = target
+                            selectedChapter = firstChapter
                         }
-                        showReader = true
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill")
