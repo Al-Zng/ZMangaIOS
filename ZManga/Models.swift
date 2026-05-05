@@ -14,9 +14,11 @@ struct Manga: Identifiable, Codable, Hashable {
     var chapters: [Chapter]
     var author: String
     var artist: String
-
     var latestChapterNumber: String?
     var lastUpdated: String?
+
+    // يُستخدم لحفظ الهوية أثناء التحميل
+    var isPlaceholder: Bool = false
 
     var highQualityCoverURL: String {
         let patterns = ["-110x150", "-150x200", "-200x300", "-300x450"]
@@ -33,7 +35,8 @@ struct Manga: Identifiable, Codable, Hashable {
     init(slug: String, title: String, coverURL: String = "", genres: [String] = [],
          status: String = "", rating: String = "", description: String = "",
          chapters: [Chapter] = [], author: String = "", artist: String = "",
-         latestChapterNumber: String? = nil, lastUpdated: String? = nil) {
+         latestChapterNumber: String? = nil, lastUpdated: String? = nil,
+         isPlaceholder: Bool = false) {
         self.slug = slug
         self.title = title
         self.coverURL = coverURL
@@ -46,6 +49,7 @@ struct Manga: Identifiable, Codable, Hashable {
         self.artist = artist
         self.latestChapterNumber = latestChapterNumber
         self.lastUpdated = lastUpdated
+        self.isPlaceholder = isPlaceholder
     }
 }
 
@@ -207,7 +211,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (مدمج مع الكاش) – خارج extension Color تماماً
+// MARK: - Cached Async Image
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
