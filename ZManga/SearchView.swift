@@ -57,8 +57,6 @@ struct SearchView: View {
                     .font(.system(size: 15))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                    .submitLabel(.search)
-                    .onSubmit { triggerSearch() }
                     .onChange(of: query) { newVal in
                         searchTask?.cancel()
                         if newVal.isEmpty {
@@ -66,7 +64,7 @@ struct SearchView: View {
                             return
                         }
                         searchTask = Task {
-                            try? await Task.sleep(nanoseconds: 600_000_000)
+                            try? await Task.sleep(nanoseconds: 400_000_000) // 0.4s debounce
                             if !Task.isCancelled { triggerSearch() }
                         }
                     }
@@ -195,9 +193,9 @@ struct SearchView: View {
             do {
                 let items = try await MangaService.shared.fetchByGenre(genre: encoded)
                 await MainActor.run {
-                    results = items
+                    results = items.filter { !$0.coverURL.isEmpty && !$0.slug.contains("feed") }
                     isLoading = false
-                    hasMore = !items.isEmpty
+                    hasMore = !results.isEmpty
                 }
             } catch {
                 await MainActor.run { isLoading = false }
