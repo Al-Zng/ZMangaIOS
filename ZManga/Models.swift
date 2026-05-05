@@ -114,6 +114,11 @@ class AppStore: ObservableObject {
         loadLibrary()
     }
 
+    // هنا مكان الدالة الصحيح
+    func retryAfterCloudflare() {
+        reloadTrigger += 1
+    }
+
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
         history.insert(progress, at: 0)
