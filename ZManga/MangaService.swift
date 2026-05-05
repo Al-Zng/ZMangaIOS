@@ -27,7 +27,7 @@ class MangaService: NSObject, ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(request)
 
-        // انتظار انتهاء التحميل
+        // Wait for loading to finish
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var observer: NSKeyValueObservation?
             observer = webView.observe(\.isLoading, options: [.new]) { _, change in
@@ -38,7 +38,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // استخراج HTML
+        // Extract HTML
         let html: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -49,7 +49,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // فحص Cloudflare في الـ HTML
+        // Check for Cloudflare
         if html.contains("Just a moment") ||
            html.contains("cf-browser-verification") ||
            html.contains("Checking your browser") ||
@@ -61,18 +61,18 @@ class MangaService: NSObject, ObservableObject {
         return html
     }
 
-    // MARK: - Fetch Latest Manga
+    // MARK: - Fetch Latest
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=latest&page=\(page)"
         let html = try await fetchHTML(urlString: url)
-        return parseMangaList(html: html)
+        return parseMangaList(html: html, extractChapterInfo: true)
     }
 
     // MARK: - Fetch Popular
     func fetchPopular(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=views&page=\(page)"
         let html = try await fetchHTML(urlString: url)
-        return parseMangaList(html: html)
+        return parseMangaList(html: html, extractChapterInfo: false)
     }
 
     // MARK: - Search
@@ -80,7 +80,7 @@ class MangaService: NSObject, ObservableObject {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
         let html = try await fetchHTML(urlString: url)
-        return parseMangaList(html: html)
+        return parseMangaList(html: html, extractChapterInfo: false)
     }
 
     // MARK: - Fetch Manga Detail
@@ -101,11 +101,11 @@ class MangaService: NSObject, ObservableObject {
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga-genre/\(genre)/?page=\(page)"
         let html = try await fetchHTML(urlString: url)
-        return parseMangaList(html: html)
+        return parseMangaList(html: html, extractChapterInfo: false)
     }
 
     // MARK: - Parse Manga List
-    private func parseMangaList(html: String) -> [Manga] {
+    private func parseMangaList(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let cardPattern = #"<div class="page-item-detail[^"]*">(.*?)</div>\s*</div>\s*</div>"#
         let cardRegex = try? NSRegularExpression(pattern: cardPattern, options: [.dotMatchesLineSeparators])
@@ -114,13 +114,18 @@ class MangaService: NSObject, ObservableObject {
         if let matches = cardRegex?.matches(in: html, range: range) {
             for match in matches.prefix(30) {
                 let block = nsHtml.substring(with: match.range)
-                if let manga = parseMangaCard(block) {
+                if var manga = parseMangaCard(block) {
+                    if extractChapterInfo {
+                        let info = parseLatestChapterInfo(from: block)
+                        manga.latestChapterNumber = info.chapter
+                        manga.lastUpdated = info.time
+                    }
                     results.append(manga)
                 }
             }
         }
         if results.isEmpty {
-            results = parseMangaSimple(html: html)
+            results = parseMangaSimple(html: html, extractChapterInfo: extractChapterInfo)
         }
         return results
     }
@@ -135,7 +140,7 @@ class MangaService: NSObject, ObservableObject {
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
-    private func parseMangaSimple(html: String) -> [Manga] {
+    private func parseMangaSimple(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
         let regex = try? NSRegularExpression(pattern: pattern, options: [])
@@ -146,13 +151,40 @@ class MangaService: NSObject, ObservableObject {
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200 else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                results.append(Manga(slug: slug, title: htmlDecode(rawTitle)))
+                var manga = Manga(slug: slug, title: htmlDecode(rawTitle))
+                if extractChapterInfo {
+                    // Attempt to extract chapter info from the surrounding block
+                    let fullBlock = nsHtml.substring(with: match.range) // This is approximate
+                    let info = parseLatestChapterInfo(from: fullBlock)
+                    manga.latestChapterNumber = info.chapter
+                    manga.lastUpdated = info.time
+                }
+                results.append(manga)
             }
         }
         return results
     }
 
-    // MARK: - Parse Manga Detail
+    /// Extract latest chapter number and time from a card block
+    private func parseLatestChapterInfo(from block: String) -> (chapter: String?, time: String?) {
+        let chapPattern = #"<a[^>]+href="[^"]*chapter[^"]*"[^>]*>Chapter\s*([^<]+)</a>"#
+        let timePattern = #"<span[^>]+class="[^"]*font-meta[^"]*"[^>]*>([^<]+)</span>"#
+        var chapter: String? = nil
+        var time: String? = nil
+        if let regex = try? NSRegularExpression(pattern: chapPattern, options: [.caseInsensitive]) {
+            if let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..., in: block)) {
+                chapter = String(block[Range(match.range(at: 1), in: block)!]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if let regex = try? NSRegularExpression(pattern: timePattern, options: [.caseInsensitive]) {
+            if let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..., in: block)) {
+                time = String(block[Range(match.range(at: 1), in: block)!]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return (chapter, time)
+    }
+
+    // MARK: - Parse Manga Detail (unchanged but uses new Manga init)
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"#, in: html) ?? ""
