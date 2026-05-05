@@ -46,7 +46,6 @@ struct SearchView: View {
 
     var searchBar: some View {
         HStack(spacing: 0) {
-            // RTL: icon on right, text flows right-to-left
             HStack(spacing: 8) {
                 if !query.isEmpty {
                     Button {
@@ -64,7 +63,7 @@ struct SearchView: View {
                     .font(.system(size: 15))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                    .multilineTextAlignment(.right)
+                    .multilineTextAlignment(.trailing)
                     .environment(\.layoutDirection, .rightToLeft)
                     .onChange(of: query) { newVal in
                         searchTask?.cancel()
@@ -266,7 +265,15 @@ struct GenrePill: View {
                 .foregroundColor(isSelected ? ZTheme.bg : ZTheme.textSecondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(isSelected ? AnyView(ZTheme.goldGradient) : AnyView(Color(ZTheme.card)))
+                .background(
+                    Group {
+                        if isSelected {
+                            ZTheme.goldGradient
+                        } else {
+                            Color(ZTheme.card)
+                        }
+                    }
+                )
                 .clipShape(Capsule())
                 .overlay(
                     Capsule().stroke(isSelected ? Color.clear : ZTheme.border, lineWidth: 1)
