@@ -15,9 +15,27 @@ struct Manga: Identifiable, Codable, Hashable {
     var author: String
     var artist: String
 
+    // New fields for latest updates
+    var latestChapterNumber: String?
+    var lastUpdated: String?
+
+    /// Returns the original image URL, removing common thumbnail size suffixes
+    var highQualityCoverURL: String {
+        let patterns = ["-110x150", "-150x200", "-200x300", "-300x450"]
+        var url = coverURL
+        for pattern in patterns {
+            if url.contains(pattern) {
+                url = url.replacingOccurrences(of: pattern, with: "")
+                break
+            }
+        }
+        return url
+    }
+
     init(slug: String, title: String, coverURL: String = "", genres: [String] = [],
          status: String = "", rating: String = "", description: String = "",
-         chapters: [Chapter] = [], author: String = "", artist: String = "") {
+         chapters: [Chapter] = [], author: String = "", artist: String = "",
+         latestChapterNumber: String? = nil, lastUpdated: String? = nil) {
         self.slug = slug
         self.title = title
         self.coverURL = coverURL
@@ -28,6 +46,8 @@ struct Manga: Identifiable, Codable, Hashable {
         self.chapters = chapters
         self.author = author
         self.artist = artist
+        self.latestChapterNumber = latestChapterNumber
+        self.lastUpdated = lastUpdated
     }
 }
 
@@ -153,14 +173,14 @@ class AppStore: ObservableObject {
     }
 }
 
-// MARK: - Design Tokens
+// MARK: - Design Tokens (modern dark theme)
 struct ZTheme {
-    static let bg      = Color(hex: "#0F1117")
-    static let surface = Color(hex: "#161B27")
-    static let card    = Color(hex: "#1C2333")
-    static let cardHover = Color(hex: "#212A3E")
-    static let border  = Color(hex: "#2A3347")
-    static let borderLight = Color(hex: "#334166")
+    static let bg      = Color(hex: "#121212")
+    static let surface = Color(hex: "#1E1E1E")
+    static let card    = Color(hex: "#2C2C2C")
+    static let cardHover = Color(hex: "#3A3A3A")
+    static let border  = Color(hex: "#3A3A3A")
+    static let borderLight = Color(hex: "#4A4A4A")
     static let accent  = Color(hex: "#4F79D4")
     static let accentBright = Color(hex: "#6B93F0")
     static let accentDim = Color(hex: "#4F79D4").opacity(0.15)
@@ -170,10 +190,6 @@ struct ZTheme {
     static let danger  = Color(hex: "#E85A6A")
     static let success = Color(hex: "#4CAF82")
     static let warning = Color(hex: "#E8A84F")
-    static let cardGradient = LinearGradient(
-        colors: [Color(hex: "#1C2333"), Color(hex: "#161B27")],
-        startPoint: .topLeading, endPoint: .bottomTrailing
-    )
 }
 
 extension Color {
