@@ -117,32 +117,31 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Latest (مع عناصر وهمية ثابتة الهوية)
+    // MARK: - Latest (مع عناصر وهمية بنفس الارتفاع)
     var latestSection: some View {
-        Group {
-            LazyVStack(spacing: 12) {
-                ForEach(latestManga) { manga in
-                    if manga.isPlaceholder {
-                        SkeletonLatestRow()
-                    } else {
-                        NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
-                            LatestUpdateRow(manga: manga)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .onAppear {
-                            if manga.id == latestManga.last?.id && !loadingMoreLatest {
-                                Task { await loadMoreLatest() }
-                            }
+        LazyVStack(spacing: 12) {
+            ForEach(latestManga) { manga in
+                if manga.isPlaceholder {
+                    SkeletonLatestRow()
+                        .frame(height: 122) // نفس ارتفاع الصف الحقيقي
+                } else {
+                    NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
+                        LatestUpdateRow(manga: manga)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .onAppear {
+                        if manga.id == latestManga.last?.id && !loadingMoreLatest {
+                            Task { await loadMoreLatest() }
                         }
                     }
                 }
             }
-            .padding(.horizontal, 16)
+        }
+        .padding(.horizontal, 16)
 
-            if loadingMoreLatest {
-                HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
-                    .padding(.vertical, 16)
-            }
+        if loadingMoreLatest {
+            HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
+                .padding(.vertical, 16)
         }
     }
 
