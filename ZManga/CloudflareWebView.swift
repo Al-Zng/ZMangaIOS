@@ -55,7 +55,7 @@ struct CloudflareSheet: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        // النقل اليدوي للكوكيز ثم الإغلاق
+                        // نسخ جميع الكوكيز فوراً
                         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
                             for cookie in cookies {
                                 HTTPCookieStorage.shared.setCookie(cookie)
@@ -88,7 +88,6 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         webView.backgroundColor = UIColor(ZTheme.bg)
         webView.scrollView.backgroundColor = UIColor(ZTheme.bg)
-        // تحميل الصفحة الأولية
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -114,13 +113,10 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
             navigationCount += 1
             guard !hasCompleted else { return }
 
-            // تحقق بعد كل تحميل: هل انتقلنا إلى صفحة المحتوى الفعلية؟
             if let currentURL = webView.url {
-                // إذا تحول الرابط ولم يعد صفحة التحدي (غالبًا يبدأ بـ /manga/...)
                 if currentURL != originalURL,
                    !currentURL.absoluteString.contains("cdn-cgi/l/chk_jschl"),
                    navigationCount > 1 {
-                    // تحقق من العنوان لزيادة الأمان
                     webView.evaluateJavaScript("document.title") { [weak self] result, _ in
                         guard let self = self, !self.hasCompleted else { return }
                         let title = result as? String ?? ""
@@ -134,7 +130,6 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
                     return
                 }
 
-                // فحص إضافي: قد لا يتغير الرابط لكن التحدي اختفى
                 webView.evaluateJavaScript("document.title") { [weak self] result, _ in
                     guard let self = self, !self.hasCompleted else { return }
                     let title = result as? String ?? ""
