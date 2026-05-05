@@ -207,7 +207,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (Final, with Referer and retry)
+// MARK: - Cached Async Image (Final – with Referer and retry)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -242,24 +242,17 @@ struct CachedAsyncImage: View {
                     )
             }
         }
-        .task(id: url?.absoluteString) {
-            await loadImage()
-        }
+        .task(id: url?.absoluteString) { await loadImage() }
     }
 
     private func loadImage() async {
         guard let url = url else {
-            isLoading = false
-            loadFailed = true
-            return
+            isLoading = false; loadFailed = true; return
         }
         let urlStr = url.absoluteString.lowercased()
-        // Skip obvious site logos
         if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
            urlStr.contains("/favicon") {
-            isLoading = false
-            loadFailed = true
-            return
+            isLoading = false; loadFailed = true; return
         }
 
         let config = URLSessionConfiguration.default
@@ -279,20 +272,13 @@ struct CachedAsyncImage: View {
                    httpResp.statusCode == 200,
                    let img = UIImage(data: data),
                    img.size.width > 0 {
-                    await MainActor.run {
-                        image = img
-                        isLoading = false
-                    }
+                    await MainActor.run { image = img; isLoading = false }
                     return
                 }
             } catch {
-                // retry after short delay
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
-        await MainActor.run {
-            loadFailed = true
-            isLoading = false
-        }
+        await MainActor.run { loadFailed = true; isLoading = false }
     }
 }
