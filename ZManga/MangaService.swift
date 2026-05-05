@@ -2,33 +2,35 @@ import Foundation
 import WebKit
 
 // MARK: - MangaService
+@MainActor
 class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lek-manga.net"
 
-    // MARK: - WebView based HTML fetcher (يحل محل URLSession)
+    // MARK: - WebView for fetching (runs on main thread)
     private var webView: WKWebView?
 
-    private func ensureWebView() -> WKWebView {
+    private func getWebView() -> WKWebView {
         if let wv = webView { return wv }
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = WKWebsiteDataStore.default() // تشارك الكوكيز مع Cloudflare
+        config.websiteDataStore = WKWebsiteDataStore.default()
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
         self.webView = wv
         return wv
     }
 
-    private func fetchHTMLUsingWebView(urlString: String) async throws -> String {
+    private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
-        let webView = ensureWebView()
+        let webView = getWebView()
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        // تحميل الصفحة (إذا لم تكن محملة مسبقًا)
+        // تحميل الصفحة على الـ main thread
         webView.load(request)
-        // انتظر حتى ينتهي التحميل
+
+        // انتظار انتهاء التحميل
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var observer: NSKeyValueObservation?
             observer = webView.observe(\.isLoading, options: [.new]) { _, change in
@@ -39,7 +41,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // استخراج HTML الحالي
+        // استخراج HTML
         return try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -54,14 +56,14 @@ class MangaService: NSObject, ObservableObject {
     // MARK: - Fetch Latest Manga
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=latest&page=\(page)"
-        let html = try await fetchHTMLUsingWebView(urlString: url)
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html)
     }
 
     // MARK: - Fetch Popular
     func fetchPopular(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=views&page=\(page)"
-        let html = try await fetchHTMLUsingWebView(urlString: url)
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html)
     }
 
@@ -69,28 +71,28 @@ class MangaService: NSObject, ObservableObject {
     func search(query: String, page: Int = 1) async throws -> [Manga] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
-        let html = try await fetchHTMLUsingWebView(urlString: url)
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html)
     }
 
     // MARK: - Fetch Manga Detail
     func fetchDetail(slug: String) async throws -> Manga {
         let url = "\(baseURL)/manga/\(slug)/"
-        let html = try await fetchHTMLUsingWebView(urlString: url)
+        let html = try await fetchHTML(urlString: url)
         return parseMangaDetail(html: html, slug: slug)
     }
 
     // MARK: - Fetch Chapter Pages
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
-        let html = try await fetchHTMLUsingWebView(urlString: url)
+        let html = try await fetchHTML(urlString: url)
         return parseChapterPages(html: html)
     }
 
     // MARK: - Fetch by Genre
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga-genre/\(genre)/?page=\(page)"
-        let html = try await fetchHTMLUsingWebView(urlString: url)
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html)
     }
 
@@ -248,7 +250,6 @@ class MangaService: NSObject, ObservableObject {
     }
 }
 
-// إعادة ZMangaError المطلوبة
 enum ZMangaError: LocalizedError {
     case cloudflareChallenge
     case parsingFailed
