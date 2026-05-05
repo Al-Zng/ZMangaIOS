@@ -9,10 +9,9 @@ struct SearchView: View {
     @State private var loadingMore = false
     @State private var errorMessage: String?
     @State private var searchTask: Task<Void, Never>?
-    @State private var showFilters = false
     @State private var selectedGenre: String? = nil
 
-    let genres = ["درامـا", "رومانسى", "فانتازا", "أكشن", "كوميدى", "رعب", "خيال علمى", "مغامرات", "رياضة"]
+    let genres = ["أكشن", "مغامرة", "فانتازيا", "كوميدي", "رعب", "رومانسي", "خيال علمي", "دراما", "رياضة", "نفسي"]
 
     let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
@@ -32,7 +31,7 @@ struct SearchView: View {
                         Spacer()
                         ProgressView().tint(ZTheme.accent)
                         Spacer()
-                    } else if results.isEmpty && !query.isEmpty {
+                    } else if results.isEmpty && (!query.isEmpty || selectedGenre != nil) {
                         emptyState
                     } else if results.isEmpty {
                         browsePrompt
@@ -46,29 +45,9 @@ struct SearchView: View {
     }
 
     var searchBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 0) {
+            // RTL: icon on right, text flows right-to-left
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16))
-                    .foregroundColor(ZTheme.textSecondary)
-
-                TextField("", text: $query, prompt: Text("Search manga...").foregroundColor(ZTheme.textTertiary))
-                    .foregroundColor(ZTheme.textPrimary)
-                    .font(.system(size: 15))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .onChange(of: query) { newVal in
-                        searchTask?.cancel()
-                        if newVal.isEmpty {
-                            results = []
-                            return
-                        }
-                        searchTask = Task {
-                            try? await Task.sleep(nanoseconds: 400_000_000) // 0.4s debounce
-                            if !Task.isCancelled { triggerSearch() }
-                        }
-                    }
-
                 if !query.isEmpty {
                     Button {
                         query = ""
@@ -79,14 +58,37 @@ struct SearchView: View {
                             .font(.system(size: 15))
                     }
                 }
+
+                TextField("", text: $query, prompt: Text("ابحث عن مانجا...").foregroundColor(ZTheme.textTertiary))
+                    .foregroundColor(ZTheme.textPrimary)
+                    .font(.system(size: 15))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .multilineTextAlignment(.right)
+                    .environment(\.layoutDirection, .rightToLeft)
+                    .onChange(of: query) { newVal in
+                        searchTask?.cancel()
+                        if newVal.isEmpty {
+                            results = []
+                            return
+                        }
+                        searchTask = Task {
+                            try? await Task.sleep(nanoseconds: 400_000_000)
+                            if !Task.isCancelled { triggerSearch() }
+                        }
+                    }
+
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundColor(query.isEmpty ? ZTheme.textTertiary : ZTheme.accent)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 11)
             .background(ZTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(ZTheme.border, lineWidth: 1)
+                    .stroke(query.isEmpty ? ZTheme.border : ZTheme.accent.opacity(0.5), lineWidth: 1)
             )
         }
         .padding(.horizontal, 16)
@@ -96,19 +98,21 @@ struct SearchView: View {
     var genrePills: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                GenrePill(title: "All", isSelected: selectedGenre == nil) {
-                    selectedGenre = nil
-                    results = []
-                }
                 ForEach(genres, id: \.self) { genre in
                     GenrePill(title: genre, isSelected: selectedGenre == genre) {
-                        selectedGenre = genre
-                        triggerGenreSearch(genre)
+                        if selectedGenre == genre {
+                            selectedGenre = nil
+                            results = []
+                        } else {
+                            selectedGenre = genre
+                            triggerGenreSearch(genre)
+                        }
                     }
                 }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
+            .environment(\.layoutDirection, .rightToLeft)
         }
     }
 
@@ -127,7 +131,7 @@ struct SearchView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(14)
 
             if loadingMore {
                 ProgressView().tint(ZTheme.accent).padding()
@@ -141,9 +145,10 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 40, weight: .ultraLight))
                 .foregroundColor(ZTheme.textTertiary)
-            Text("No results for \"\(query)\"")
+            Text("لا توجد نتائج")
                 .font(.system(size: 15))
                 .foregroundColor(ZTheme.textSecondary)
+                .environment(\.layoutDirection, .rightToLeft)
             Spacer()
         }
     }
@@ -154,9 +159,10 @@ struct SearchView: View {
             Image(systemName: "sparkle.magnifyingglass")
                 .font(.system(size: 48, weight: .ultraLight))
                 .foregroundColor(ZTheme.textTertiary)
-            Text("Search or browse by genre")
+            Text("ابحث أو تصفح حسب التصنيف")
                 .font(.system(size: 15))
                 .foregroundColor(ZTheme.textSecondary)
+                .environment(\.layoutDirection, .rightToLeft)
             Spacer()
         }
     }
@@ -231,17 +237,19 @@ struct SearchGridCard: View {
     let manga: Manga
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .center, spacing: 6) {
             CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
                 .aspectRatio(2/3, contentMode: .fill)
                 .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
                 .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
 
             Text(manga.title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(ZTheme.textPrimary)
                 .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .environment(\.layoutDirection, .rightToLeft)
         }
     }
 }
@@ -254,11 +262,11 @@ struct GenrePill: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(isSelected ? ZTheme.bg : ZTheme.textSecondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(isSelected ? ZTheme.accent : ZTheme.card)
+                .background(isSelected ? AnyView(ZTheme.goldGradient) : AnyView(Color(ZTheme.card)))
                 .clipShape(Capsule())
                 .overlay(
                     Capsule().stroke(isSelected ? Color.clear : ZTheme.border, lineWidth: 1)
