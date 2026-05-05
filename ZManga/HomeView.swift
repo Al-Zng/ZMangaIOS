@@ -9,7 +9,8 @@ struct HomeView: View {
     @State private var latestPage = 1
     @State private var loadingMoreLatest = false
 
-    let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
+    // Adaptive يمنع التمدد المفرط مع حد أقصى 130pt
+    let columns = [GridItem(.adaptive(minimum: 110, maximum: 130), spacing: 8)]
 
     var body: some View {
         NavigationView {
@@ -17,23 +18,19 @@ struct HomeView: View {
                 ZTheme.bg.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        // Header Bar
                         headerBar
                             .padding(.bottom, 20)
 
-                        // Continue Reading
                         if !store.history.isEmpty {
                             sectionLabel("CONTINUE READING", icon: "clock.fill")
                             continueReadingSection
                                 .padding(.bottom, 24)
                         }
 
-                        // Popular
                         sectionLabel("POPULAR", icon: "flame.fill")
                         popularSection
                             .padding(.bottom, 24)
 
-                        // Latest
                         sectionLabel("LATEST UPDATES", icon: "bolt.fill")
                         latestSection
 
@@ -54,7 +51,7 @@ struct HomeView: View {
 
     // MARK: - Header
     var headerBar: some View {
-        HStack(alignment: .center) {
+        HStack {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Image(systemName: "book.closed.fill")
@@ -75,7 +72,6 @@ struct HomeView: View {
         .padding(.top, 12)
     }
 
-    // MARK: - Section Label
     func sectionLabel(_ title: String, icon: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
@@ -111,9 +107,7 @@ struct HomeView: View {
             if isLoadingPopular {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(0..<6, id: \.self) { _ in
-                            SkeletonCard()
-                        }
+                        ForEach(0..<6, id: \.self) { _ in SkeletonCard() }
                     }
                     .padding(.horizontal, 20)
                 }
@@ -138,9 +132,7 @@ struct HomeView: View {
         Group {
             if isLoadingLatest {
                 LazyVGrid(columns: columns, spacing: 14) {
-                    ForEach(0..<12, id: \.self) { _ in
-                        SkeletonGridCard()
-                    }
+                    ForEach(0..<12, id: \.self) { _ in SkeletonGridCard() }
                 }
                 .padding(.horizontal, 16)
             } else {
@@ -211,10 +203,9 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Continue Reading Card
+// MARK: - Cards
 struct ContinueReadingCard: View {
     let progress: ReadingProgress
-
     var body: some View {
         ZStack(alignment: .bottom) {
             AsyncImage(url: URL(string: progress.mangaCover)) { phase in
@@ -226,103 +217,82 @@ struct ContinueReadingCard: View {
             .frame(width: 116, height: 164)
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
-            LinearGradient(
-                colors: [.clear, .clear, .black.opacity(0.95)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            LinearGradient(colors: [.clear, .clear, .black.opacity(0.95)], startPoint: .top, endPoint: .bottom)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(progress.mangaTitle)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(2)
+                    .font(.system(size: 11, weight: .semibold)).foregroundColor(.white).lineLimit(2)
                 HStack(spacing: 4) {
-                    Image(systemName: "book.fill")
-                        .font(.system(size: 8))
-                        .foregroundColor(ZTheme.accentBright)
+                    Image(systemName: "book.fill").font(.system(size: 8)).foregroundColor(ZTheme.accentBright)
                     Text("Ch.\(progress.chapterNumber) · p.\(progress.pageIndex + 1)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(ZTheme.accentBright)
+                        .font(.system(size: 10, weight: .medium)).foregroundColor(ZTheme.accentBright)
                 }
             }
-            .padding(8)
-            .frame(width: 116, alignment: .leading)
+            .padding(8).frame(width: 116, alignment: .leading)
         }
         .frame(width: 116, height: 164)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 
-// MARK: - Popular Card (Landscape style)
 struct PopularCard: View {
     let manga: Manga
-
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             AsyncImage(url: URL(string: manga.coverURL)) { phase in
                 switch phase {
-                case .success(let img):
-                    img.resizable().aspectRatio(contentMode: .fill)
-                case .failure:
-                    ZTheme.card.overlay(Image(systemName: "photo").foregroundColor(ZTheme.textTertiary))
-                default:
-                    ZTheme.card.overlay(ProgressView().tint(ZTheme.accent).scaleEffect(0.7))
+                case .success(let img): img.resizable().aspectRatio(contentMode: .fill)
+                case .failure: ZTheme.card.overlay(Image(systemName: "photo").foregroundColor(ZTheme.textTertiary))
+                default: ZTheme.card.overlay(ProgressView().tint(ZTheme.accent))
                 }
             }
             .frame(width: 120, height: 168)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(ZTheme.border, lineWidth: 0.5)
-            )
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(ZTheme.border, lineWidth: 0.5))
 
             Text(manga.title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(ZTheme.textPrimary)
-                .lineLimit(2)
+                .font(.system(size: 11, weight: .medium)).foregroundColor(ZTheme.textPrimary).lineLimit(2)
                 .frame(width: 120, alignment: .leading)
         }
         .frame(width: 120)
     }
 }
 
-// MARK: - Latest Grid Card
 struct LatestGridCard: View {
     let manga: Manga
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             AsyncImage(url: URL(string: manga.coverURL)) { phase in
                 switch phase {
                 case .success(let img):
-                    img.resizable().aspectRatio(contentMode: .fill)
+                    img.resizable()
+                        .aspectRatio(2/3, contentMode: .fill)
+                        .frame(maxWidth: 130, maxHeight: 195)
+                        .clipped()
                 case .failure:
                     ZTheme.card.overlay(Image(systemName: "photo").foregroundColor(ZTheme.textTertiary))
+                        .frame(height: 195)
                 default:
                     ZTheme.card.overlay(ProgressView().tint(ZTheme.accent).scaleEffect(0.6))
+                        .frame(height: 195)
                 }
             }
-            .aspectRatio(2/3, contentMode: .fill)
-            .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(ZTheme.border, lineWidth: 0.5)
-            )
 
             Text(manga.title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundColor(ZTheme.textPrimary)
                 .lineLimit(2)
+                .frame(maxWidth: 130, alignment: .leading)
         }
+        .frame(maxWidth: 130)
     }
 }
 
 // MARK: - Skeleton Views
 struct SkeletonCard: View {
     @State private var shimmer = false
-
     var body: some View {
         RoundedRectangle(cornerRadius: 10)
             .fill(ZTheme.card)
@@ -330,11 +300,9 @@ struct SkeletonCard: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
                     .fill(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0), Color.white.opacity(0.05), Color.white.opacity(0)],
-                            startPoint: shimmer ? .topLeading : .bottomTrailing,
-                            endPoint: shimmer ? .bottomTrailing : .topLeading
-                        )
+                        LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.05), Color.white.opacity(0)],
+                                       startPoint: shimmer ? .topLeading : .bottomTrailing,
+                                       endPoint: shimmer ? .bottomTrailing : .topLeading)
                     )
             )
             .onAppear { withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { shimmer = true } }
@@ -343,20 +311,17 @@ struct SkeletonCard: View {
 
 struct SkeletonGridCard: View {
     @State private var shimmer = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             RoundedRectangle(cornerRadius: 8)
                 .fill(ZTheme.card)
-                .aspectRatio(2/3, contentMode: .fill)
+                .aspectRatio(2/3, contentMode: .fit)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0), Color.white.opacity(0.04), Color.white.opacity(0)],
-                                startPoint: shimmer ? .topLeading : .bottomTrailing,
-                                endPoint: shimmer ? .bottomTrailing : .topLeading
-                            )
+                            LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.04), Color.white.opacity(0)],
+                                           startPoint: shimmer ? .topLeading : .bottomTrailing,
+                                           endPoint: shimmer ? .bottomTrailing : .topLeading)
                         )
                 )
             RoundedRectangle(cornerRadius: 3).fill(ZTheme.card).frame(height: 10)
