@@ -270,7 +270,7 @@ struct GenrePill: View {
                         if isSelected {
                             ZTheme.goldGradient
                         } else {
-                            Color(ZTheme.card)
+                            ZTheme.card
                         }
                     }
                 )
