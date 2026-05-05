@@ -210,7 +210,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (فلتر شعار دقيق)
+// MARK: - Cached Async Image (يدعم Referer، تجاهل الشعارات الحقيقية فقط)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -218,14 +218,15 @@ struct CachedAsyncImage: View {
     @State private var loadFailed = false
 
     private static let cache = URLCache(
-        memoryCapacity: 50 * 1024 * 1024,
-        diskCapacity: 200 * 1024 * 1024,
+        memoryCapacity: 80 * 1024 * 1024,
+        diskCapacity: 400 * 1024 * 1024,
         directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
     )
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = cache
         config.requestCachePolicy = .returnCacheDataElseLoad
+        config.timeoutIntervalForRequest = 30
         return URLSession(configuration: config)
     }()
 
@@ -253,21 +254,21 @@ struct CachedAsyncImage: View {
                 return
             }
             let urlStr = url.absoluteString.lowercased()
-            // تجاهل الشعارات الشهيرة فقط
+            // تجاهل شعارات الموقع الواضحة فقط
             if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
-               urlStr.contains("cropped") || urlStr.contains("favicon") {
+               urlStr.contains("cropped-") || urlStr.contains("favicon") {
                 isLoading = false
                 loadFailed = true
                 return
             }
+            var request = URLRequest(url: url)
+            request.setValue("https://lek-manga.net", forHTTPHeaderField: "Referer")
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
             do {
-                let (data, _) = try await session.data(from: url)
-                if let uiImage = UIImage(data: data) {
-                    if uiImage.size.width > 50 && uiImage.size.height > 50 {
-                        image = uiImage
-                    } else {
-                        loadFailed = true
-                    }
+                let (data, response) = try await session.data(for: request)
+                if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200,
+                   let uiImage = UIImage(data: data), uiImage.size.width > 50, uiImage.size.height > 50 {
+                    image = uiImage
                 } else {
                     loadFailed = true
                 }
