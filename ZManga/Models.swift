@@ -210,25 +210,19 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (يدعم Referer، تجاهل الشعارات الحقيقية فقط)
+// MARK: - Cached Async Image (محسّن: إعادة محاولة، حجم مقبول، Referer)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var loadFailed = false
+    @State private var attempt = 0
 
     private static let cache = URLCache(
         memoryCapacity: 80 * 1024 * 1024,
         diskCapacity: 400 * 1024 * 1024,
         directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
     )
-    private let session: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.urlCache = cache
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        config.timeoutIntervalForRequest = 30
-        return URLSession(configuration: config)
-    }()
 
     var body: some View {
         Group {
@@ -237,45 +231,49 @@ struct CachedAsyncImage: View {
                     .resizable()
                     .interpolation(.high)
                     .antialiased(true)
-            } else if isLoading && !loadFailed {
+            } else if isLoading && attempt < 3 {
                 Rectangle()
-                    .fill(Color(white: 0.1))
+                    .fill(Color(white: 0.12))
                     .overlay(ProgressView().tint(ZTheme.accent))
             } else {
                 Rectangle()
-                    .fill(Color(white: 0.1))
-                    .overlay(Image(systemName: "photo").font(.title2).foregroundColor(.gray))
+                    .fill(Color(white: 0.12))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundColor(ZTheme.textTertiary)
+                    )
             }
         }
-        .task {
-            guard let url = url else {
-                isLoading = false
-                loadFailed = true
-                return
-            }
-            let urlStr = url.absoluteString.lowercased()
-            // تجاهل شعارات الموقع الواضحة فقط
-            if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
-               urlStr.contains("cropped-") || urlStr.contains("favicon") {
-                isLoading = false
-                loadFailed = true
-                return
-            }
+        .task(id: url?.absoluteString) { await loadImage() }
+    }
+
+    private func loadImage() async {
+        guard let url = url else { isLoading = false; loadFailed = true; return }
+        let urlStr = url.absoluteString.lowercased()
+        if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
+           urlStr.contains("/favicon") { isLoading = false; loadFailed = true; return }
+
+        let config = URLSessionConfiguration.default
+        config.urlCache = Self.cache
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: config)
+
+        for _ in 0..<3 {
+            attempt += 1
             var request = URLRequest(url: url)
             request.setValue("https://lek-manga.net", forHTTPHeaderField: "Referer")
             request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
             do {
-                let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200,
-                   let uiImage = UIImage(data: data), uiImage.size.width > 50, uiImage.size.height > 50 {
-                    image = uiImage
-                } else {
-                    loadFailed = true
+                let (data, resp) = try await session.data(for: request)
+                if let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                   let img = UIImage(data: data), img.size.width > 0 {
+                    await MainActor.run { image = img; isLoading = false }
+                    return
                 }
-            } catch {
-                loadFailed = true
-            }
-            isLoading = false
+            } catch { try? await Task.sleep(nanoseconds: 500_000_000) }
         }
+        await MainActor.run { loadFailed = true; isLoading = false }
     }
 }
