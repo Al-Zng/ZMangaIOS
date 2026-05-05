@@ -5,8 +5,8 @@ struct LibraryView: View {
     @State private var sortOption: SortOption = .dateAdded
 
     enum SortOption: String, CaseIterable {
-        case dateAdded = "تاريخ الإضافة"
-        case title = "الاسم"
+        case dateAdded = "Date Added"
+        case title = "Title"
     }
 
     let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
@@ -32,10 +32,9 @@ struct LibraryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("مكتبتي")
-                        .font(.system(size: 16, weight: .bold))
+                    Text("Library")
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(ZTheme.textPrimary)
-                        .environment(\.layoutDirection, .rightToLeft)
                 }
                 if !store.library.isEmpty {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -66,24 +65,22 @@ struct LibraryView: View {
     }
 
     var emptyState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "heart")
-                .font(.system(size: 52, weight: .ultraLight))
+        VStack(spacing: 12) {
+            Image(systemName: "books.vertical")
+                .font(.system(size: 48, weight: .ultraLight))
                 .foregroundColor(ZTheme.textTertiary)
-            Text("مكتبتك فارغة")
-                .font(.system(size: 16, weight: .semibold))
+            Text("Your library is empty")
+                .font(.system(size: 15))
                 .foregroundColor(ZTheme.textSecondary)
-                .environment(\.layoutDirection, .rightToLeft)
-            Text("أضف المانجا من صفحتها بالضغط على ♥")
+            Text("Add manga from their detail page")
                 .font(.system(size: 13))
                 .foregroundColor(ZTheme.textTertiary)
-                .environment(\.layoutDirection, .rightToLeft)
         }
     }
 
     var libraryGrid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 14) {
+            LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(sortedLibrary) { manga in
                     NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
                         LibraryCard(manga: manga)
@@ -92,12 +89,12 @@ struct LibraryView: View {
                         Button(role: .destructive) {
                             store.removeFromLibrary(manga)
                         } label: {
-                            Label("إزالة", systemImage: "heart.slash")
+                            Label("Remove", systemImage: "heart.slash")
                         }
                     }
                 }
             }
-            .padding(14)
+            .padding(16)
         }
     }
 }
@@ -106,29 +103,34 @@ struct LibraryCard: View {
     let manga: Manga
 
     var body: some View {
-        VStack(alignment: .center, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
                 CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
                     .aspectRatio(2/3, contentMode: .fill)
                     .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
 
                 Image(systemName: "heart.fill")
                     .font(.system(size: 10))
                     .foregroundColor(ZTheme.accent)
                     .padding(5)
-                    .background(Color.black.opacity(0.7))
+                    .background(Color.black.opacity(0.6))
                     .clipShape(Circle())
-                    .padding(5)
+                    .padding(6)
             }
 
             Text(manga.title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(ZTheme.textPrimary)
                 .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .environment(\.layoutDirection, .rightToLeft)
+
+            if !manga.genres.isEmpty {
+                Text(manga.genres.prefix(2).joined(separator: " · "))
+                    .font(.system(size: 10))
+                    .foregroundColor(ZTheme.textTertiary)
+                    .lineLimit(1)
+            }
         }
     }
 }

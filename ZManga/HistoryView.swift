@@ -18,10 +18,9 @@ struct HistoryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("سجل القراءة")
-                        .font(.system(size: 16, weight: .bold))
+                    Text("History")
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(ZTheme.textPrimary)
-                        .environment(\.layoutDirection, .rightToLeft)
                 }
                 if !store.history.isEmpty {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -37,29 +36,26 @@ struct HistoryView: View {
             }
             .toolbarBackground(ZTheme.surface, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .alert("مسح السجل", isPresented: $showClearAlert) {
-                Button("مسح", role: .destructive) { store.clearHistory() }
-                Button("إلغاء", role: .cancel) {}
+            .alert("Clear History", isPresented: $showClearAlert) {
+                Button("Clear", role: .destructive) { store.clearHistory() }
+                Button("Cancel", role: .cancel) {}
             } message: {
-                Text("سيتم حذف جميع سجل القراءة.")
-                    .environment(\.layoutDirection, .rightToLeft)
+                Text("This will remove all reading history.")
             }
         }
     }
 
     var emptyState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image(systemName: "clock")
-                .font(.system(size: 52, weight: .ultraLight))
+                .font(.system(size: 48, weight: .ultraLight))
                 .foregroundColor(ZTheme.textTertiary)
-            Text("لا يوجد سجل قراءة")
-                .font(.system(size: 16, weight: .semibold))
+            Text("No reading history")
+                .font(.system(size: 15))
                 .foregroundColor(ZTheme.textSecondary)
-                .environment(\.layoutDirection, .rightToLeft)
-            Text("المانجا التي تقرأها ستظهر هنا")
+            Text("Manga you read will appear here")
                 .font(.system(size: 13))
                 .foregroundColor(ZTheme.textTertiary)
-                .environment(\.layoutDirection, .rightToLeft)
         }
     }
 
@@ -69,7 +65,7 @@ struct HistoryView: View {
                 NavigationLink(destination: MangaDetailView(slug: progress.mangaSlug, preloadTitle: progress.mangaTitle, preloadCover: progress.mangaCover)) {
                     HistoryRow(progress: progress)
                 }
-                .listRowBackground(ZTheme.bg)
+                .listRowBackground(ZTheme.surface)
                 .listRowSeparatorTint(ZTheme.border)
                 .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             }
@@ -89,46 +85,37 @@ struct HistoryRow: View {
     var timeAgo: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        formatter.locale = Locale(identifier: "ar")
         return formatter.localizedString(for: progress.lastRead, relativeTo: Date())
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(progress.mangaTitle)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(ZTheme.textPrimary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.trailing)
-                    .environment(\.layoutDirection, .rightToLeft)
-
-                HStack(spacing: 4) {
-                    Text(timeAgo)
-                        .font(.system(size: 11))
-                        .foregroundColor(ZTheme.textTertiary)
-                    Text("·")
-                        .foregroundColor(ZTheme.textTertiary)
-                    Text("ص. \(progress.pageIndex + 1)")
-                        .font(.system(size: 12))
-                        .foregroundColor(ZTheme.textSecondary)
-                    Text("·")
-                        .foregroundColor(ZTheme.textTertiary)
-                    Text("ف. \(progress.chapterNumber)")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(ZTheme.accent)
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .frame(maxWidth: .infinity)
-
             CachedAsyncImage(url: URL(string: progress.mangaCover))
                 .frame(width: 50, height: 70)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(ZTheme.border, lineWidth: 0.5)
-                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(progress.mangaTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(ZTheme.textPrimary)
+                    .lineLimit(2)
+
+                HStack(spacing: 6) {
+                    Text("Ch. \(progress.chapterNumber)")
+                        .font(.system(size: 12))
+                        .foregroundColor(ZTheme.accent)
+                    Text("·")
+                        .foregroundColor(ZTheme.textTertiary)
+                    Text("Page \(progress.pageIndex + 1)")
+                        .font(.system(size: 12))
+                        .foregroundColor(ZTheme.textSecondary)
+                }
+
+                Text(timeAgo)
+                    .font(.system(size: 11))
+                    .foregroundColor(ZTheme.textTertiary)
+            }
+            Spacer()
         }
         .padding(.vertical, 10)
     }
