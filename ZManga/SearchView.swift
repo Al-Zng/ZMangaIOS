@@ -22,15 +22,12 @@ struct SearchView: View {
                 ZTheme.bg.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // Search bar
                     searchBar
 
-                    // Genre pills
                     genrePills
 
                     Divider().background(ZTheme.border)
 
-                    // Results
                     if isLoading && results.isEmpty {
                         Spacer()
                         ProgressView().tint(ZTheme.accent)
@@ -122,7 +119,7 @@ struct SearchView: View {
             LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(results) { manga in
                     NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
-                        LatestGridCard(manga: manga)   // ← استبدلنا MangaGridCard بـ LatestGridCard
+                        SearchGridCard(manga: manga)
                     }
                     .buttonStyle(PlainButtonStyle())
                     .onAppear {
@@ -228,6 +225,25 @@ struct SearchView: View {
             } catch {
                 await MainActor.run { loadingMore = false }
             }
+        }
+    }
+}
+
+struct SearchGridCard: View {
+    let manga: Manga
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                .aspectRatio(2/3, contentMode: .fill)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+
+            Text(manga.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(ZTheme.textPrimary)
+                .lineLimit(2)
         }
     }
 }
