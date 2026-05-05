@@ -19,35 +19,15 @@ class MangaService: NSObject, ObservableObject {
         return wv
     }
 
-    private func syncCookies(to webView: WKWebView) {
-        guard let url = URL(string: baseURL) else { return }
-        if let cookies = HTTPCookieStorage.shared.cookies(for: url) {
-            let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
-            for cookie in cookies {
-                cookieStore.setCookie(cookie)
-            }
-        }
-    }
-
-    private func saveCookies(from webView: WKWebView) {
-        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
-        cookieStore.getAllCookies { cookies in
-            for cookie in cookies {
-                HTTPCookieStorage.shared.setCookie(cookie)
-            }
-        }
-    }
-
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
         let webView = getWebView()
-        syncCookies(to: webView)
-
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(request)
 
+        // انتظار انتهاء التحميل
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var observer: NSKeyValueObservation?
             observer = webView.observe(\.isLoading, options: [.new]) { _, change in
@@ -58,6 +38,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
+        // استخراج HTML
         let html: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -68,8 +49,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        saveCookies(from: webView)
-
+        // فحص Cloudflare
         if html.contains("Just a moment") ||
            html.contains("cf-browser-verification") ||
            html.contains("Checking your browser") ||
@@ -78,16 +58,10 @@ class MangaService: NSObject, ObservableObject {
             throw ZMangaError.cloudflareChallenge
         }
 
-        let stripped = html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stripped.isEmpty, html.count > 500 else {
-            throw ZMangaError.networkError("Empty or invalid page content")
-        }
-
         return html
     }
 
-    // MARK: - Fetch Latest Manga
+    // MARK: - Fetch Latest
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=latest&page=\(page)"
         let html = try await fetchHTML(urlString: url)
@@ -107,7 +81,6 @@ class MangaService: NSObject, ObservableObject {
         let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
         let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.coverURL.isEmpty && !$0.slug.contains("feed") && !$0.slug.isEmpty }
     }
 
     // MARK: - Fetch Manga Detail
@@ -142,7 +115,6 @@ class MangaService: NSObject, ObservableObject {
             for match in matches.prefix(30) {
                 let block = nsHtml.substring(with: match.range)
                 if var manga = parseMangaCard(block) {
-                    if manga.coverURL.isEmpty { continue }
                     if extractChapterInfo {
                         let info = parseLatestChapterInfo(from: block)
                         manga.latestChapterNumber = info.chapter
@@ -165,7 +137,6 @@ class MangaService: NSObject, ObservableObject {
         let title = firstCapture(pattern: titlePattern, in: block) ?? slug.replacingOccurrences(of: "-", with: " ").capitalized
         let coverPattern = #"<img[^>]+(?:src|data-src)="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#
         let cover = firstCapture(pattern: coverPattern, in: block) ?? ""
-        if slug.isEmpty || slug == "feed" { return nil }
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
@@ -178,22 +149,9 @@ class MangaService: NSObject, ObservableObject {
             guard let match = match, match.numberOfRanges >= 4 else { return }
             let slug = nsHtml.substring(with: match.range(at: 2))
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200,
-                  slug != "feed", !slug.contains("cdn-cgi") else { return }
+            guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200 else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                var cover = ""
-                let coverPattern = #"<img[^>]+(?:src|data-src)="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#
-                if let coverMatch = firstCapture(pattern: coverPattern, in: html) {
-                    cover = coverMatch
-                }
-                var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: cover)
-                if extractChapterInfo {
-                    let fullBlock = nsHtml.substring(with: match.range)
-                    let info = parseLatestChapterInfo(from: fullBlock)
-                    manga.latestChapterNumber = info.chapter
-                    manga.lastUpdated = info.time
-                }
-                results.append(manga)
+                results.append(Manga(slug: slug, title: htmlDecode(rawTitle)))
             }
         }
         return results
@@ -217,7 +175,7 @@ class MangaService: NSObject, ObservableObject {
         return (chapter, time)
     }
 
-    // MARK: - Parse Manga Detail
+    // MARK: - Parse Manga Detail (الأصلي بدون تغيير)
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"#, in: html) ?? ""
@@ -242,7 +200,7 @@ class MangaService: NSObject, ObservableObject {
 
         var chapters: [Chapter] = []
         let chapLinkPattern = #"href="https?://[^/]+/manga/[^/]+/([\d]+(?:-[\d]+)?)/"[^>]*>\s*(?:<[^>]*>\s*)*(\d+)"#
-        let chapRegex = try? NSRegularExpression(pattern: chapLinkPattern, options: [.caseInsensitive])
+        let chapRegex = try? NSRegularExpression(pattern: chapLinkPattern)
         chapRegex?.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
             guard let m = m, m.numberOfRanges >= 3 else { return }
             let chapSlug = ns.substring(with: m.range(at: 1))
@@ -253,7 +211,7 @@ class MangaService: NSObject, ObservableObject {
         }
         if chapters.isEmpty {
             let fallbackPattern = #"href="https?://[^/]+/manga/[^/]+/(\d+)/""#
-            let fallbackRegex = try? NSRegularExpression(pattern: fallbackPattern, options: [.caseInsensitive])
+            let fallbackRegex = try? NSRegularExpression(pattern: fallbackPattern)
             fallbackRegex?.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
                 guard let m = m, m.numberOfRanges >= 2 else { return }
                 let num = ns.substring(with: m.range(at: 1))
@@ -264,18 +222,12 @@ class MangaService: NSObject, ObservableObject {
         }
         chapters.sort { (Int($0.number) ?? 0) > (Int($1.number) ?? 0) }
 
-        return Manga(slug: slug,
-                     title: htmlDecode(title ?? slug.replacingOccurrences(of: "-", with: " ").capitalized),
-                     coverURL: cover,
-                     genres: genres,
-                     status: status,
-                     rating: rating,
-                     description: description,
-                     chapters: chapters,
-                     author: author)
+        return Manga(slug: slug, title: htmlDecode(title ?? slug.replacingOccurrences(of: "-", with: " ").capitalized),
+                     coverURL: cover, genres: genres, status: status, rating: rating,
+                     description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (يدعم lazy loading عبر data-src)
+    // MARK: - Parse Chapter Pages (محسّنة: تفضل data-src)
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
@@ -291,23 +243,10 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // إذا لم نجد data-src، نستخدم src (يُلتقط حتى لو كانت منخفضة الجودة، لكنها أفضل من لا شيء)
+        // إذا لم نجد data-src، نستخدم src
         if pages.isEmpty {
             let fallbackPattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#
             if let regex = try? NSRegularExpression(pattern: fallbackPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-                regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-                    if let match = match, match.numberOfRanges >= 2 {
-                        let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !pages.contains(url) { pages.append(url) }
-                    }
-                }
-            }
-        }
-
-        // محاولة إضافية: ربما data-src بدون class (احتياطي)
-        if pages.isEmpty {
-            let altPattern = #"<img[^>]+data-src="([^"]+)"[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#
-            if let regex = try? NSRegularExpression(pattern: altPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
                 regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                     if let match = match, match.numberOfRanges >= 2 {
                         let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
