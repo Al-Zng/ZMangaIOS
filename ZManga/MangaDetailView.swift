@@ -62,9 +62,8 @@ struct MangaDetailView: View {
 
     var loadingState: some View {
         VStack(spacing: 20) {
-            // Skeleton header
             HStack(alignment: .top, spacing: 16) {
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(ZTheme.card)
                     .frame(width: 110, height: 155)
 
@@ -100,21 +99,17 @@ struct MangaDetailView: View {
     func content(manga: Manga) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // Hero section
                 heroSection(manga: manga)
 
                 Divider().background(ZTheme.border).padding(.vertical, 20)
 
-                // Description
                 if !manga.description.isEmpty {
                     descriptionSection(manga.description)
                     Divider().background(ZTheme.border).padding(.vertical, 16)
                 }
 
-                // Chapters header
                 chaptersHeader(count: manga.chapters.count)
 
-                // Chapter list
                 LazyVStack(spacing: 0) {
                     ForEach(sortedChapters) { chapter in
                         ChapterRow(
@@ -136,19 +131,10 @@ struct MangaDetailView: View {
 
     func heroSection(manga: Manga) -> some View {
         HStack(alignment: .top, spacing: 16) {
-            // Cover
-            AsyncImage(url: URL(string: manga.coverURL)) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                default:
-                    ZTheme.card.overlay(
-                        Image(systemName: "photo").foregroundColor(ZTheme.textTertiary)
-                    )
-                }
-            }
-            .frame(width: 110, height: 155)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                .frame(width: 110, height: 155)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(manga.title)
@@ -178,7 +164,6 @@ struct MangaDetailView: View {
                     }
                 }
 
-                // Genre tags
                 if !manga.genres.isEmpty {
                     FlowLayout(spacing: 5) {
                         ForEach(manga.genres, id: \.self) { genre in
@@ -193,7 +178,6 @@ struct MangaDetailView: View {
                     }
                 }
 
-                // Start reading button
                 if let first = manga.chapters.max(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) {
                     Button {
                         let target = manga.chapters.min(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) ?? first
