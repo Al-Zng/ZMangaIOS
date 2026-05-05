@@ -72,13 +72,13 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    func search(query: String, page: Int = 1) async throws -> [Manga] {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
-        let html = try await fetchHTML(urlString: url)
-        return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty }
-    }
+func search(query: String, page: Int = 1) async throws -> [Manga] {
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+    let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
+    let html = try await fetchHTML(urlString: url)
+    return parseMangaList(html: html, extractChapterInfo: false)
+        .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
+}
 
     func fetchDetail(slug: String) async throws -> Manga {
         let url = "\(baseURL)/manga/\(slug)/"
@@ -109,7 +109,7 @@ class MangaService: NSObject, ObservableObject {
         for match in cardRegex.matches(in: html, range: range).prefix(30) {
             let block = nsHtml.substring(with: match.range)
             if var manga = parseMangaCard(block) {
-                if isLogoOnly(manga.coverURL) { continue }
+            if manga.coverURL.isEmpty || isLogoOnly(manga.coverURL) { continue }
                 if extractChapterInfo {
                     let info = parseLatestChapterInfo(from: block)
                     manga.latestChapterNumber = info.chapter
