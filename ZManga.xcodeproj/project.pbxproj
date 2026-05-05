@@ -17,7 +17,6 @@
     AA000024 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000025; };
     AA000026 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000027; };
     AA000028 /* CloudflareWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000029; };
-    AA000030 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000031; };
 
     AA000004 /* ZMangaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZMangaApp.swift; path = ZManga/ZMangaApp.swift; sourceTree = "<group>"; };
     AA000005 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = ZManga/ContentView.swift; sourceTree = "<group>"; };
@@ -32,12 +31,11 @@
     AA000025 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HistoryView.swift; path = ZManga/HistoryView.swift; sourceTree = "<group>"; };
     AA000027 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryView.swift; path = ZManga/LibraryView.swift; sourceTree = "<group>"; };
     AA000029 /* CloudflareWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudflareWebView.swift; path = ZManga/CloudflareWebView.swift; sourceTree = "<group>"; };
-    AA000031 /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DownloadsView.swift; path = ZManga/DownloadsView.swift; sourceTree = "<group>"; };
 
     AA000007 /* Sources */ = {
       isa = PBXSourcesBuildPhase;
       buildActionMask = 2147483647;
-      files = (AA000001, AA000002, AA000003, AA000014, AA000016, AA000018, AA000020, AA000022, AA000024, AA000026, AA000028, AA000030);
+      files = (AA000001, AA000002, AA000003, AA000014, AA000016, AA000018, AA000020, AA000022, AA000024, AA000026, AA000028);
       runOnlyForDeploymentPostprocessing = 0;
     };
 
@@ -57,7 +55,7 @@
 
     AA000008 = {
       isa = PBXGroup;
-      children = (AA000004, AA000005, AA000013, AA000015, AA000017, AA000019, AA000021, AA000023, AA000025, AA000027, AA000029, AA000031, AA000006, AA00000E);
+      children = (AA000004, AA000005, AA000013, AA000015, AA000017, AA000019, AA000021, AA000023, AA000025, AA000027, AA000029, AA000006, AA00000E);
       sourceTree = "<group>";
     };
 
