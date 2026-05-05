@@ -77,7 +77,7 @@ class MangaService: NSObject, ObservableObject {
         let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
         let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
+            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty }
     }
 
     func fetchDetail(slug: String) async throws -> Manga {
@@ -109,7 +109,7 @@ class MangaService: NSObject, ObservableObject {
         for match in cardRegex.matches(in: html, range: range).prefix(30) {
             let block = nsHtml.substring(with: match.range)
             if var manga = parseMangaCard(block) {
-                if manga.coverURL.isEmpty || isLogoOnly(manga.coverURL) { continue }
+                if isLogoOnly(manga.coverURL) { continue }
                 if extractChapterInfo {
                     let info = parseLatestChapterInfo(from: block)
                     manga.latestChapterNumber = info.chapter
@@ -158,8 +158,7 @@ class MangaService: NSObject, ObservableObject {
                 let cover = firstCapture(pattern: #"<img[^>]+data-src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
                          ?? firstCapture(pattern: #"<img[^>]+src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
                          ?? ""
-                var manga = Manga(slug: slug, title: htmlDecode(rawTitle),
-                                  coverURL: isLogoOnly(cover) ? "" : cover)
+                var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: isLogoOnly(cover) ? "" : cover)
                 if extractChapterInfo {
                     let fullBlock = nsHtml.substring(with: match.range)
                     let info = parseLatestChapterInfo(from: fullBlock)
@@ -245,15 +244,14 @@ class MangaService: NSObject, ObservableObject {
                      author: author)
     }
 
-    // MARK: - Parse Chapter Pages (Final, prefers data-src, filters logos)
+    // MARK: - Parse Chapter Pages (Final fix: data-src first, then src, whole page)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // 1) Collect all images that look like chapter pages.
-        //    Prefer data-src, then src.
-        let imgPattern = #"<img[^>]+\b(?:data-src|src)="([^"]+)"[^>]*>"#
+        // Capture all image URLs from the entire HTML, preferring data-src over src
+        let imgPattern = #"<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>"#
         if let regex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
             regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
@@ -264,7 +262,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // 2) If still empty, try to find any image URL in the page (fallback)
+        // If no images found, try a more aggressive fallback (look for any image URL in the page)
         if pages.isEmpty {
             let fallbackPattern = #"(?:data-src|src)="(https?://[^"]+\.(?:jpg|jpeg|png|webp))""#
             if let fRegex = try? NSRegularExpression(pattern: fallbackPattern, options: [.caseInsensitive]) {
