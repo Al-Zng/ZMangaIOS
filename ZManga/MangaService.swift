@@ -27,7 +27,7 @@ class MangaService: NSObject, ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(request)
 
-        // Wait for loading to finish
+        // انتظار انتهاء التحميل
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var observer: NSKeyValueObservation?
             observer = webView.observe(\.isLoading, options: [.new]) { _, change in
@@ -38,7 +38,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // Extract HTML
+        // استخراج HTML
         let html: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -49,7 +49,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // Check for Cloudflare
+        // فحص Cloudflare في الـ HTML
         if html.contains("Just a moment") ||
            html.contains("cf-browser-verification") ||
            html.contains("Checking your browser") ||
@@ -61,7 +61,7 @@ class MangaService: NSObject, ObservableObject {
         return html
     }
 
-    // MARK: - Fetch Latest
+    // MARK: - Fetch Latest Manga
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=latest&page=\(page)"
         let html = try await fetchHTML(urlString: url)
@@ -153,8 +153,8 @@ class MangaService: NSObject, ObservableObject {
             if !results.contains(where: { $0.slug == slug }) {
                 var manga = Manga(slug: slug, title: htmlDecode(rawTitle))
                 if extractChapterInfo {
-                    // Attempt to extract chapter info from the surrounding block
-                    let fullBlock = nsHtml.substring(with: match.range) // This is approximate
+                    // Attempt to extract chapter info from surroundings (approximate)
+                    let fullBlock = nsHtml.substring(with: match.range) // approximate
                     let info = parseLatestChapterInfo(from: fullBlock)
                     manga.latestChapterNumber = info.chapter
                     manga.lastUpdated = info.time
@@ -184,7 +184,7 @@ class MangaService: NSObject, ObservableObject {
         return (chapter, time)
     }
 
-    // MARK: - Parse Manga Detail (unchanged but uses new Manga init)
+    // MARK: - Parse Manga Detail
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"#, in: html) ?? ""
@@ -236,12 +236,14 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages
+    // MARK: - Parse Chapter Pages (محسّنة لاستخراج الصور بشكل صحيح)
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
-        let pattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#
         let ns = html as NSString
-        if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) {
+
+        // نمط يبحث عن img تحتوي class="wp-manga-chapter-img" ويأخذ src بغض النظر عن ترتيب السمات
+        let pattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#
+        if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
             regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 if let match = match, match.numberOfRanges >= 2 {
                     let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -249,9 +251,11 @@ class MangaService: NSObject, ObservableObject {
                 }
             }
         }
+
+        // إذا لم نجد، نجرب نمطًا بديلاً: أي img تحتوي class="wp-manga-chapter-img" (قد يكون src قبل class)
         if pages.isEmpty {
-            let fallbackPattern = #"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]+(?:src|data-src)="([^"]+)""#
-            if let regex = try? NSRegularExpression(pattern: fallbackPattern, options: [.dotMatchesLineSeparators]) {
+            let altPattern = #"<img[^>]*src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#
+            if let regex = try? NSRegularExpression(pattern: altPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
                 regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                     if let match = match, match.numberOfRanges >= 2 {
                         let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -260,6 +264,7 @@ class MangaService: NSObject, ObservableObject {
                 }
             }
         }
+
         return pages
     }
 
