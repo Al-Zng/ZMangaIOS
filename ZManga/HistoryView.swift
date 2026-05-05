@@ -90,16 +90,9 @@ struct HistoryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: URL(string: progress.mangaCover)) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                default:
-                    ZTheme.card
-                }
-            }
-            .frame(width: 50, height: 70)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            CachedAsyncImage(url: URL(string: progress.mangaCover))
+                .frame(width: 50, height: 70)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(progress.mangaTitle)
