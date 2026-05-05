@@ -21,6 +21,7 @@ class MangaService: NSObject, ObservableObject {
 
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+
         let webView = getWebView()
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -53,61 +54,73 @@ class MangaService: NSObject, ObservableObject {
             AppStore.currentStore?.triggerCloudflare(url: url)
             throw ZMangaError.cloudflareChallenge
         }
+
         return html
     }
 
-    // MARK: - Public API
-
+    // MARK: - Fetch Latest Manga
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
-        let html = try await fetchHTML(urlString: "\(baseURL)/manga/?m_orderby=latest&page=\(page)")
+        let url = "\(baseURL)/manga/?m_orderby=latest&page=\(page)"
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: true)
     }
 
+    // MARK: - Fetch Popular
     func fetchPopular(page: Int = 1) async throws -> [Manga] {
-        let html = try await fetchHTML(urlString: "\(baseURL)/manga/?m_orderby=views&page=\(page)")
+        let url = "\(baseURL)/manga/?m_orderby=views&page=\(page)"
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
+    // MARK: - Search (بدون فلتر الغلاف)
     func search(query: String, page: Int = 1) async throws -> [Manga] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        let html = try await fetchHTML(urlString: "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)")
+        let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty }
+            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty } // فقط إزالة الوهمية
     }
 
+    // MARK: - Fetch Manga Detail
     func fetchDetail(slug: String) async throws -> Manga {
-        let html = try await fetchHTML(urlString: "\(baseURL)/manga/\(slug)/")
+        let url = "\(baseURL)/manga/\(slug)/"
+        let html = try await fetchHTML(urlString: url)
         return parseMangaDetail(html: html, slug: slug)
     }
 
+    // MARK: - Fetch Chapter Pages
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
-        let html = try await fetchHTML(urlString: "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/")
+        let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+        let html = try await fetchHTML(urlString: url)
         return parseChapterPages(html: html)
     }
 
+    // MARK: - Fetch by Genre
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
-        let html = try await fetchHTML(urlString: "\(baseURL)/manga-genre/\(genre)/?page=\(page)")
+        let url = "\(baseURL)/manga-genre/\(genre)/?page=\(page)"
+        let html = try await fetchHTML(urlString: url)
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - Parse Manga List (with optional chapter info)
-
+    // MARK: - Parse Manga List (يقبل الأغطية الفارغة)
     private func parseMangaList(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let cardPattern = #"<div class="page-item-detail[^"]*">(.*?)</div>\s*</div>\s*</div>"#
-        guard let cardRegex = try? NSRegularExpression(pattern: cardPattern, options: [.dotMatchesLineSeparators]) else { return results }
+        let cardRegex = try? NSRegularExpression(pattern: cardPattern, options: [.dotMatchesLineSeparators])
         let nsHtml = html as NSString
         let range = NSRange(location: 0, length: nsHtml.length)
-        for match in cardRegex.matches(in: html, range: range).prefix(30) {
-            let block = nsHtml.substring(with: match.range)
-            if var manga = parseMangaCard(block) {
-                if isLogoOnly(manga.coverURL) { continue }
-                if extractChapterInfo {
-                    let info = parseLatestChapterInfo(from: block)
-                    manga.latestChapterNumber = info.chapter
-                    manga.lastUpdated = info.time
+        if let matches = cardRegex?.matches(in: html, range: range) {
+            for match in matches.prefix(30) {
+                let block = nsHtml.substring(with: match.range)
+                if var manga = parseMangaCard(block) {
+                    if isLogoURL(manga.coverURL) { continue } // نتجاهل الشعارات فقط
+                    if extractChapterInfo {
+                        let info = parseLatestChapterInfo(from: block)
+                        manga.latestChapterNumber = info.chapter
+                        manga.lastUpdated = info.time
+                    }
+                    results.append(manga)
                 }
-                results.append(manga)
             }
         }
         if results.isEmpty {
@@ -116,9 +129,10 @@ class MangaService: NSObject, ObservableObject {
         return results
     }
 
-    private func isLogoOnly(_ url: String) -> Bool {
+    private func isLogoURL(_ url: String) -> Bool {
         let lower = url.lowercased()
-        return lower.contains("lekmanga.png") || lower.contains("-512.png") || lower.contains("/favicon")
+        return lower.contains("lekmanga.png") || lower.contains("-512.png") ||
+               lower.contains("cropped-") || lower.contains("favicon")
     }
 
     private func parseMangaCard(_ block: String) -> Manga? {
@@ -126,33 +140,33 @@ class MangaService: NSObject, ObservableObject {
         guard let slug = firstCapture(pattern: hrefPattern, in: block), !slug.isEmpty else { return nil }
         let titlePattern = #"<(?:h3|h4)[^>]*>\s*<a[^>]*>([^<]+)</a>"#
         let title = firstCapture(pattern: titlePattern, in: block) ?? slug.replacingOccurrences(of: "-", with: " ").capitalized
-
-        // prefer data-src over src
-        let cover = firstCapture(pattern: #"<img[^>]+data-src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: block)
-                 ?? firstCapture(pattern: #"<img[^>]+src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: block)
-                 ?? ""
-        if slug.isEmpty || slug == "feed" || isLogoOnly(cover) { return nil }
+        let coverPattern = #"<img[^>]+(?:src|data-src)="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#
+        let cover = firstCapture(pattern: coverPattern, in: block) ?? ""
+        if slug.isEmpty || slug == "feed" || isLogoURL(cover) { return nil }
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
     private func parseMangaSimple(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return results }
+        let regex = try? NSRegularExpression(pattern: pattern, options: [])
         let nsHtml = html as NSString
-        regex.enumerateMatches(in: html, range: NSRange(location: 0, length: nsHtml.length)) { match, _, _ in
+        regex?.enumerateMatches(in: html, range: NSRange(location: 0, length: nsHtml.length)) { match, _, _ in
             guard let match = match, match.numberOfRanges >= 4 else { return }
             let slug = nsHtml.substring(with: match.range(at: 2))
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200,
                   slug != "feed", !slug.contains("cdn-cgi") else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                let cover = firstCapture(pattern: #"<img[^>]+data-src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
-                         ?? firstCapture(pattern: #"<img[^>]+src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
-                         ?? ""
-                var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: isLogoOnly(cover) ? "" : cover)
+                var cover = ""
+                let coverPattern = #"<img[^>]+(?:src|data-src)="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#
+                if let coverMatch = firstCapture(pattern: coverPattern, in: html) {
+                    if !isLogoURL(coverMatch) { cover = coverMatch }
+                }
+                var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: cover)
                 if extractChapterInfo {
-                    let info = parseLatestChapterInfo(from: nsHtml.substring(with: match.range))
+                    let fullBlock = nsHtml.substring(with: match.range)
+                    let info = parseLatestChapterInfo(from: fullBlock)
                     manga.latestChapterNumber = info.chapter
                     manga.lastUpdated = info.time
                 }
@@ -163,19 +177,27 @@ class MangaService: NSObject, ObservableObject {
     }
 
     private func parseLatestChapterInfo(from block: String) -> (chapter: String?, time: String?) {
-        let chapter = firstCapture(pattern: #"<a[^>]+href="[^"]*chapter[^"]*"[^>]*>Chapter\s*([^<]+)</a>"#, in: block)
-        let time = firstCapture(pattern: #"<span[^>]+class="[^"]*font-meta[^"]*"[^>]*>([^<]+)</span>"#, in: block)
-        return (chapter?.trimmingCharacters(in: .whitespacesAndNewlines),
-                time?.trimmingCharacters(in: .whitespaces))
+        let chapPattern = #"<a[^>]+href="[^"]*chapter[^"]*"[^>]*>Chapter\s*([^<]+)</a>"#
+        let timePattern = #"<span[^>]+class="[^"]*font-meta[^"]*"[^>]*>([^<]+)</span>"#
+        var chapter: String? = nil
+        var time: String? = nil
+        if let regex = try? NSRegularExpression(pattern: chapPattern, options: [.caseInsensitive]) {
+            if let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..., in: block)) {
+                chapter = String(block[Range(match.range(at: 1), in: block)!]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if let regex = try? NSRegularExpression(pattern: timePattern, options: [.caseInsensitive]) {
+            if let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..., in: block)) {
+                time = String(block[Range(match.range(at: 1), in: block)!]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return (chapter, time)
     }
 
     // MARK: - Parse Manga Detail
-
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
-        let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+data-src="([^"]+)"#, in: html)
-                 ?? firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+src="([^"]+)"#, in: html)
-                 ?? ""
+        let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"#, in: html) ?? ""
         let description: String = {
             if let raw = firstCapture(pattern: #"<div class="summary__content[^"]*">(.*?)</div>"#, in: html) {
                 return stripHTML(raw).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,37 +210,32 @@ class MangaService: NSObject, ObservableObject {
 
         var genres: [String] = []
         let genrePattern = #"/manga-genre/[^/]+/">([^<]+)</a>"#
-        if let genreRegex = try? NSRegularExpression(pattern: genrePattern) {
-            let ns = html as NSString
-            genreRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-                guard let m = m, m.numberOfRanges >= 2 else { return }
-                genres.append(ns.substring(with: m.range(at: 1)))
-            }
+        let genreRegex = try? NSRegularExpression(pattern: genrePattern)
+        let ns = html as NSString
+        genreRegex?.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            guard let m = m, m.numberOfRanges >= 2 else { return }
+            genres.append(ns.substring(with: m.range(at: 1)))
         }
 
         var chapters: [Chapter] = []
         let chapLinkPattern = #"href="https?://[^/]+/manga/[^/]+/([\d]+(?:-[\d]+)?)/"[^>]*>\s*(?:<[^>]*>\s*)*(\d+)"#
-        if let chapRegex = try? NSRegularExpression(pattern: chapLinkPattern, options: [.caseInsensitive]) {
-            let ns = html as NSString
-            chapRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-                guard let m = m, m.numberOfRanges >= 3 else { return }
-                let chapSlug = ns.substring(with: m.range(at: 1))
-                let chapNum = ns.substring(with: m.range(at: 2))
-                if !chapters.contains(where: { $0.slug == chapSlug }) {
-                    chapters.append(Chapter(slug: chapSlug, number: chapNum))
-                }
+        let chapRegex = try? NSRegularExpression(pattern: chapLinkPattern, options: [.caseInsensitive])
+        chapRegex?.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            guard let m = m, m.numberOfRanges >= 3 else { return }
+            let chapSlug = ns.substring(with: m.range(at: 1))
+            let chapNum = ns.substring(with: m.range(at: 2))
+            if !chapters.contains(where: { $0.slug == chapSlug }) {
+                chapters.append(Chapter(slug: chapSlug, number: chapNum))
             }
         }
         if chapters.isEmpty {
             let fallbackPattern = #"href="https?://[^/]+/manga/[^/]+/(\d+)/""#
-            if let fallbackRegex = try? NSRegularExpression(pattern: fallbackPattern, options: [.caseInsensitive]) {
-                let ns = html as NSString
-                fallbackRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-                    guard let m = m, m.numberOfRanges >= 2 else { return }
-                    let num = ns.substring(with: m.range(at: 1))
-                    if !chapters.contains(where: { $0.slug == num }) {
-                        chapters.append(Chapter(slug: num, number: num))
-                    }
+            let fallbackRegex = try? NSRegularExpression(pattern: fallbackPattern, options: [.caseInsensitive])
+            fallbackRegex?.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+                guard let m = m, m.numberOfRanges >= 2 else { return }
+                let num = ns.substring(with: m.range(at: 1))
+                if !chapters.contains(where: { $0.slug == num }) {
+                    chapters.append(Chapter(slug: num, number: num))
                 }
             }
         }
@@ -235,43 +252,37 @@ class MangaService: NSObject, ObservableObject {
                      author: author)
     }
 
-    // MARK: - Parse Chapter Pages (data-src first, then src inside reading-content)
-
+    // MARK: - Parse Chapter Pages (استخراج قوي لجميع الحالات)
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // Extract the content inside reading-content
-        var container = ""
-        let containerPattern = #"<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>\s*(?:<div|\z)"#
-        if let containerRegex = try? NSRegularExpression(pattern: containerPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-            containerRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-                guard let match = match, match.numberOfRanges >= 2 else { return }
-                container += ns.substring(with: match.range(at: 1))
+        // تجميع المحتوى داخل page-break أو reading-content
+        let containerPatterns = [
+            #"<div[^>]*class="[^"]*page-break[^"]*"[^>]*>(.*?)</div>"#,
+            #"<div[^>]*class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>"#
+        ]
+        var combined = ""
+        for pattern in containerPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+                regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+                    if let match = match, match.numberOfRanges >= 2 {
+                        combined += ns.substring(with: match.range(at: 1))
+                    }
+                }
             }
         }
-        if container.isEmpty { container = html }
+        if combined.isEmpty { combined = html }
 
-        // Try data-src first
-        let dataSrcPattern = #"<img[^>]+data-src="([^"]+)"[^>]*>"#
-        if let dsRegex = try? NSRegularExpression(pattern: dataSrcPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-            let c = container as NSString
-            dsRegex.enumerateMatches(in: container, range: NSRange(location: 0, length: c.length)) { match, _, _ in
-                guard let match = match, match.numberOfRanges >= 2 else { return }
-                let url = c.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if isValidImageURL(url) && !pages.contains(url) { pages.append(url) }
-            }
-        }
-
-        // Fallback to src if no data-src found
-        if pages.isEmpty {
-            let srcPattern = #"<img[^>]+src="([^"]+)"[^>]*>"#
-            if let sRegex = try? NSRegularExpression(pattern: srcPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-                let c = container as NSString
-                sRegex.enumerateMatches(in: container, range: NSRange(location: 0, length: c.length)) { match, _, _ in
-                    guard let match = match, match.numberOfRanges >= 2 else { return }
-                    let url = c.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if isValidImageURL(url) && !pages.contains(url) { pages.append(url) }
+        let imgPattern = #"<img[^>]+(?:src|data-src)="([^"]+)"[^>]*>"#
+        if let regex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            let cNs = combined as NSString
+            regex.enumerateMatches(in: combined, range: NSRange(location: 0, length: cNs.length)) { match, _, _ in
+                if let match = match, match.numberOfRanges >= 2 {
+                    let url = cNs.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if isValidImageURL(url) && !pages.contains(url) {
+                        pages.append(url)
+                    }
                 }
             }
         }
@@ -282,12 +293,13 @@ class MangaService: NSObject, ObservableObject {
     private func isValidImageURL(_ url: String) -> Bool {
         guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
         let lower = url.lowercased()
-        if lower.contains("lekmanga.png") || lower.contains("-512.png") || lower.contains("/favicon") { return false }
-        return lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") || lower.contains(".webp")
+        if lower.contains("lekmanga.png") || lower.contains("-512.png") ||
+           lower.contains("cropped-") || lower.contains("favicon") { return false }
+        return lower.contains(".jpg") || lower.contains(".jpeg") ||
+               lower.contains(".png") || lower.contains(".webp")
     }
 
     // MARK: - Helpers
-
     private func firstCapture(pattern: String, in text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         let ns = text as NSString
