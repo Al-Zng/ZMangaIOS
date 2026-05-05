@@ -210,7 +210,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (محسن ليتجاهل الشعارات)
+// MARK: - Cached Async Image (فلتر شعار دقيق)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -252,11 +252,10 @@ struct CachedAsyncImage: View {
                 loadFailed = true
                 return
             }
-            // تجاهل روابط الشعارات والأيقونات
             let urlStr = url.absoluteString.lowercased()
-            if urlStr.contains("logo") || urlStr.contains("icon") ||
-               urlStr.contains("lekmanga.png") || urlStr.contains("512.png") ||
-               urlStr.contains("favicon") || urlStr.contains("cropped") {
+            // تجاهل الشعارات الشهيرة فقط
+            if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
+               urlStr.contains("cropped") || urlStr.contains("favicon") {
                 isLoading = false
                 loadFailed = true
                 return
@@ -264,7 +263,6 @@ struct CachedAsyncImage: View {
             do {
                 let (data, _) = try await session.data(from: url)
                 if let uiImage = UIImage(data: data) {
-                    // تأكد أن الصورة كبيرة (ليست أيقونة)
                     if uiImage.size.width > 50 && uiImage.size.height > 50 {
                         image = uiImage
                     } else {
