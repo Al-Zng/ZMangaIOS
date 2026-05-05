@@ -52,9 +52,24 @@ struct MangaDetailView: View {
             }
         }
         .fullScreenCover(isPresented: $showReader) {
-            if let chapter = selectedChapter, let manga = manga {
-                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
-                    .environmentObject(store)
+            Group {
+                if let chapter = selectedChapter, let manga = manga {
+                    ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
+                        .environmentObject(store)
+                } else {
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+                        VStack(spacing: 20) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 44, weight: .ultraLight))
+                                .foregroundColor(ZTheme.danger)
+                            Text("Chapter data missing")
+                                .foregroundColor(.white)
+                            Button("Close") { showReader = false }
+                                .foregroundColor(ZTheme.accent)
+                        }
+                    }
+                }
             }
         }
         .task { await loadDetail() }
