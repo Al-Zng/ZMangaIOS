@@ -18,7 +18,6 @@ struct ReaderView: View {
     @State private var currentChapterSlug: String
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
-    @State private var didLoadInitial = false
 
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter]) {
         self.manga = manga
@@ -45,14 +44,11 @@ struct ReaderView: View {
             } else if allPages.isEmpty && !isLoading {
                 emptyPagesView
             } else {
-                // ScrollView with page images
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
                             if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
-                                ChapterSeparator(
-                                    number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??"
-                                )
+                                ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
                             }
                             MangaPageImage(url: page.url)
                                 .onAppear {
@@ -84,12 +80,10 @@ struct ReaderView: View {
                 }
             }
 
-            // Always-visible close button
+            // زر الإغلاق دائم
             VStack {
                 HStack {
-                    Button {
-                        dismiss()
-                    } label: {
+                    Button { dismiss() } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(.white)
@@ -105,14 +99,8 @@ struct ReaderView: View {
                 Spacer()
             }
 
-            if showUI {
-                topBar
-            }
-
-            VStack {
-                Spacer()
-                bottomBar
-            }
+            if showUI { topBar }
+            VStack { Spacer(); bottomBar }
         }
         .ignoresSafeArea(edges: .bottom)
         .statusBarHidden(!showUI)
@@ -145,104 +133,61 @@ struct ReaderView: View {
         .padding(.horizontal, 60)
         .padding(.top, 56)
         .padding(.bottom, 14)
-        .background(
-            LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom)
-        )
+        .background(LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom))
         .transition(.opacity)
     }
 
     var bottomBar: some View {
         Group {
             if !allPages.isEmpty {
-                VStack(spacing: 0) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Rectangle().fill(Color.white.opacity(0.08))
-                            Rectangle()
-                                .fill(ZTheme.accent)
-                                .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
-                                .animation(.easeOut(duration: 0.15), value: currentPage)
-                        }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Color.white.opacity(0.08))
+                        Rectangle()
+                            .fill(ZTheme.accent)
+                            .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
+                            .animation(.easeOut(duration: 0.15), value: currentPage)
                     }
-                    .frame(height: 2)
                 }
+                .frame(height: 2)
             }
         }
     }
 
     var loadingOverlay: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 20) {
-                ProgressView()
-                    .tint(ZTheme.accent)
-                    .scaleEffect(1.4)
-                Text("Loading chapter...")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.5))
-            }
+        VStack(spacing: 20) {
+            ProgressView().tint(ZTheme.accent).scaleEffect(1.4)
+            Text("Loading chapter...").font(.system(size: 14)).foregroundColor(.white.opacity(0.5))
         }
     }
 
     var emptyPagesView: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 20) {
-                Image(systemName: "book.closed")
-                    .font(.system(size: 44, weight: .ultraLight))
-                    .foregroundColor(.white.opacity(0.5))
-                Text("No pages found")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.6))
-                Button("Go Back") {
-                    dismiss()
-                }
+        VStack(spacing: 20) {
+            Image(systemName: "book.closed").font(.system(size: 44, weight: .ultraLight)).foregroundColor(.white.opacity(0.5))
+            Text("No pages found").font(.system(size: 14)).foregroundColor(.white.opacity(0.6))
+            Button("Go Back") { dismiss() }
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(ZTheme.bg)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 24).padding(.vertical, 10)
                 .background(ZTheme.accent)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
         }
     }
 
     func errorOverlay(_ err: String) -> some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 20) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 44, weight: .ultraLight))
-                    .foregroundColor(ZTheme.danger)
-                Text(err)
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.6))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                Button("Retry") { Task { await loadInitialChapter() } }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(ZTheme.bg)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-                    .background(ZTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                Button("Go Back") {
-                    dismiss()
-                }
-                .font(.system(size: 14))
-                .foregroundColor(ZTheme.accent)
-            }
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 44, weight: .ultraLight)).foregroundColor(ZTheme.danger)
+            Text(err).font(.system(size: 14)).foregroundColor(.white.opacity(0.6)).multilineTextAlignment(.center).padding(.horizontal, 32)
+            Button("Retry") { Task { await loadInitialChapter() } }
+                .font(.system(size: 15, weight: .semibold)).foregroundColor(ZTheme.bg).padding(.horizontal, 24).padding(.vertical, 10).background(ZTheme.accent).clipShape(RoundedRectangle(cornerRadius: 10))
+            Button("Go Back") { dismiss() }.foregroundColor(ZTheme.accent)
         }
     }
 
-    // MARK: - Load Chapter
     func loadInitialChapter() async {
-        isLoading = true
-        errorMessage = nil
+        isLoading = true; errorMessage = nil
         do {
-            let urls = try await MangaService.shared.fetchChapterPages(
-                mangaSlug: manga.slug, chapterSlug: chapter.slug
-            )
+            let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
             await MainActor.run {
                 allPages = urls.map { (chapterSlug: chapter.slug, url: $0) }
                 chapterBoundaries = [(slug: chapter.slug, startIndex: 0)]
@@ -250,15 +195,9 @@ struct ReaderView: View {
                 isLoading = false
             }
         } catch ZMangaError.cloudflareChallenge {
-            await MainActor.run {
-                errorMessage = "Cloudflare verification required. Go back and complete the verification."
-                isLoading = false
-            }
+            await MainActor.run { errorMessage = "Cloudflare verification required. Go back and complete the verification."; isLoading = false }
         } catch {
-            await MainActor.run {
-                errorMessage = error.localizedDescription
-                isLoading = false
-            }
+            await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
         }
     }
 
@@ -311,7 +250,7 @@ struct ReaderView: View {
     }
 }
 
-// MARK: - Manga Page Image (using CachedAsyncImage)
+// MARK: - Manga Page Image
 struct MangaPageImage: View {
     let url: String
 
