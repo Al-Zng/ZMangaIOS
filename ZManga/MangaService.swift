@@ -175,7 +175,7 @@ class MangaService: NSObject, ObservableObject {
         return (chapter, time)
     }
 
-    // MARK: - Parse Manga Detail (الأصلي بدون تغيير)
+    // MARK: - Parse Manga Detail
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+(?:src|data-src)="([^"]+)"#, in: html) ?? ""
@@ -227,12 +227,12 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (محسّنة: تفضل data-src)
+    // MARK: - Parse Chapter Pages (تفضيل data-src للصور عالية الدقة)
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // الأولوية لـ data-src (الصورة عالية الدقة)
+        // الأولوية لـ data-src (جودة عالية)
         let primaryPattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*data-src="([^"]+)"[^>]*>"#
         if let regex = try? NSRegularExpression(pattern: primaryPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
             regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
