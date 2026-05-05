@@ -15,39 +15,28 @@ struct HomeView: View {
                 ZTheme.bg.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        // Header Bar
-                        headerBar
-                            .padding(.bottom, 20)
+                        headerBar.padding(.bottom, 20)
 
-                        // Continue Reading
                         if !store.history.isEmpty {
                             sectionLabel("CONTINUE READING", icon: "clock.fill")
-                            continueReadingSection
-                                .padding(.bottom, 24)
+                            continueReadingSection.padding(.bottom, 24)
                         }
 
-                        // Popular
                         sectionLabel("POPULAR", icon: "flame.fill")
-                        popularSection
-                            .padding(.bottom, 24)
+                        popularSection.padding(.bottom, 24)
 
-                        // Latest Updates (vertical list style)
                         sectionLabel("LATEST UPDATES", icon: "bolt.fill")
                         latestSection
 
                         Color.clear.frame(height: 32)
                     }
                 }
-                .refreshable {
-                    await loadAll()
-                }
+                .refreshable { await loadAll() }
             }
             .navigationBarHidden(true)
         }
         .task { await loadAll() }
-        .onChange(of: store.reloadTrigger) { _ in
-            Task { await loadAll() }
-        }
+        .onChange(of: store.reloadTrigger) { _ in Task { await loadAll() } }
     }
 
     // MARK: - Header
@@ -73,7 +62,6 @@ struct HomeView: View {
         .padding(.top, 12)
     }
 
-    // MARK: - Section Label
     func sectionLabel(_ title: String, icon: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
@@ -109,9 +97,7 @@ struct HomeView: View {
             if isLoadingPopular {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(0..<6, id: \.self) { _ in
-                            SkeletonPopularCard()
-                        }
+                        ForEach(0..<6, id: \.self) { _ in SkeletonPopularCard() }
                     }
                     .padding(.horizontal, 20)
                 }
@@ -131,45 +117,34 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Latest Updates (vertical list)
+    // MARK: - Latest (مع عناصر وهمية ثابتة الهوية)
     var latestSection: some View {
-        Group {
-            if isLoadingLatest {
-                VStack(spacing: 12) {
-                    ForEach(0..<8, id: \.self) { _ in
-                        SkeletonLatestRow()
+        LazyVStack(spacing: 12) {
+            ForEach(latestManga) { manga in
+                if manga.isPlaceholder {
+                    SkeletonLatestRow()
+                } else {
+                    NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
+                        LatestUpdateRow(manga: manga)
                     }
-                }
-                .padding(.horizontal, 16)
-            } else {
-                LazyVStack(spacing: 12) {
-                    ForEach(latestManga) { manga in
-                        NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
-                            LatestUpdateRow(manga: manga)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .onAppear {
-                            if manga.id == latestManga.last?.id && !loadingMoreLatest {
-                                Task { await loadMoreLatest() }
-                            }
+                    .buttonStyle(PlainButtonStyle())
+                    .onAppear {
+                        if manga.id == latestManga.last?.id && !loadingMoreLatest {
+                            Task { await loadMoreLatest() }
                         }
                     }
-                }
-                .padding(.horizontal, 16)
-
-                if loadingMoreLatest {
-                    HStack {
-                        Spacer()
-                        ProgressView().tint(ZTheme.accent)
-                        Spacer()
-                    }
-                    .padding(.vertical, 16)
                 }
             }
         }
+        .padding(.horizontal, 16)
+
+        if loadingMoreLatest {
+            HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
+                .padding(.vertical, 16)
+        }
     }
 
-    // MARK: - Fetch logic
+    // MARK: - Fetch Logic
     func loadAll() async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await loadLatest(reset: true) }
@@ -178,16 +153,32 @@ struct HomeView: View {
     }
 
     func loadLatest(reset: Bool = false) async {
-        if reset { latestPage = 1 }
-        if reset { await MainActor.run { isLoadingLatest = true } }
+        if reset {
+            latestPage = 1
+            let placeholders = (0..<8).map { i in
+                Manga(slug: "placeholder-\(i)", title: "", isPlaceholder: true)
+            }
+            await MainActor.run {
+                latestManga = placeholders
+                isLoadingLatest = true
+            }
+        }
+
         do {
             let items = try await MangaService.shared.fetchLatest(page: latestPage)
             await MainActor.run {
-                if reset { latestManga = items } else { latestManga.append(contentsOf: items) }
+                if reset {
+                    latestManga = items
+                } else {
+                    latestManga.append(contentsOf: items)
+                }
                 isLoadingLatest = false
             }
         } catch {
-            await MainActor.run { isLoadingLatest = false }
+            await MainActor.run {
+                if reset { latestManga = [] }
+                isLoadingLatest = false
+            }
         }
     }
 
@@ -213,7 +204,7 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Latest Update Row (vertical card)
+// MARK: - Latest Update Row
 struct LatestUpdateRow: View {
     let manga: Manga
 
@@ -254,7 +245,7 @@ struct LatestUpdateRow: View {
     }
 }
 
-// MARK: - Popular Card (horizontal)
+// MARK: - Popular Card
 struct PopularCard: View {
     let manga: Manga
 
@@ -314,7 +305,7 @@ struct ContinueReadingCard: View {
     }
 }
 
-// MARK: - Skeleton Views
+// MARK: - Skeleton Cards
 struct SkeletonPopularCard: View {
     @State private var shimmer = false
     var body: some View {
