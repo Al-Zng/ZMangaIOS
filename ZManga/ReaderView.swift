@@ -18,6 +18,7 @@ struct ReaderView: View {
     @State private var currentChapterSlug: String
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
+    @State private var retryCount = 0
 
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter]) {
         self.manga = manga
@@ -64,9 +65,10 @@ struct ReaderView: View {
                                 Spacer()
                                 VStack(spacing: 8) {
                                     ProgressView().tint(ZTheme.accent)
-                                    Text("Loading next chapter...")
+                                    Text("جاري تحميل الفصل التالي...")
                                         .font(.system(size: 12))
                                         .foregroundColor(.white.opacity(0.5))
+                                        .environment(\.layoutDirection, .rightToLeft)
                                 }
                                 Spacer()
                             }
@@ -87,9 +89,10 @@ struct ReaderView: View {
                         Image(systemName: "xmark")
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(.white)
-                            .frame(width: 34, height: 34)
-                            .background(.black.opacity(0.7))
+                            .frame(width: 36, height: 36)
+                            .background(.black.opacity(0.75))
                             .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.white.opacity(0.1), lineWidth: 1))
                             .shadow(color: .black.opacity(0.5), radius: 4)
                     }
                     Spacer()
@@ -112,12 +115,13 @@ struct ReaderView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(manga.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundColor(.white)
                     .lineLimit(1)
-                Text("Chapter \(currentChapterNumber)")
+                    .environment(\.layoutDirection, .rightToLeft)
+                Text("فصل \(currentChapterNumber)")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(ZTheme.accent)
             }
             Spacer()
             if !allPages.isEmpty {
@@ -126,14 +130,16 @@ struct ReaderView: View {
                     .foregroundColor(.white.opacity(0.75))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(.black.opacity(0.55))
+                    .background(.black.opacity(0.6))
                     .clipShape(Capsule())
             }
         }
         .padding(.horizontal, 60)
         .padding(.top, 56)
         .padding(.bottom, 14)
-        .background(LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom))
+        .background(
+            LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom)
+        )
         .transition(.opacity)
     }
 
@@ -144,48 +150,95 @@ struct ReaderView: View {
                     ZStack(alignment: .leading) {
                         Rectangle().fill(Color.white.opacity(0.08))
                         Rectangle()
-                            .fill(ZTheme.accent)
+                            .fill(ZTheme.goldGradient)
                             .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
                             .animation(.easeOut(duration: 0.15), value: currentPage)
                     }
                 }
-                .frame(height: 2)
+                .frame(height: 3)
             }
         }
     }
 
     var loadingOverlay: some View {
         VStack(spacing: 20) {
-            ProgressView().tint(ZTheme.accent).scaleEffect(1.4)
-            Text("Loading chapter...").font(.system(size: 14)).foregroundColor(.white.opacity(0.5))
+            ProgressView()
+                .tint(ZTheme.accent)
+                .scaleEffect(1.4)
+            Text("جاري تحميل الفصل...")
+                .font(.system(size: 14))
+                .foregroundColor(.white.opacity(0.5))
+                .environment(\.layoutDirection, .rightToLeft)
         }
     }
 
     var emptyPagesView: some View {
         VStack(spacing: 20) {
-            Image(systemName: "book.closed").font(.system(size: 44, weight: .ultraLight)).foregroundColor(.white.opacity(0.5))
-            Text("No pages found").font(.system(size: 14)).foregroundColor(.white.opacity(0.6))
-            Button("Go Back") { dismiss() }
-                .font(.system(size: 15, weight: .semibold))
+            Image(systemName: "book.closed")
+                .font(.system(size: 44, weight: .ultraLight))
+                .foregroundColor(.white.opacity(0.5))
+            Text("لا توجد صفحات")
+                .font(.system(size: 14))
+                .foregroundColor(.white.opacity(0.6))
+                .environment(\.layoutDirection, .rightToLeft)
+            if retryCount < 3 {
+                Button("إعادة المحاولة") {
+                    retryCount += 1
+                    Task { await loadInitialChapter() }
+                }
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(ZTheme.bg)
                 .padding(.horizontal, 24).padding(.vertical, 10)
-                .background(ZTheme.accent)
+                .background(ZTheme.goldGradient)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            Button("رجوع") { dismiss() }
+                .foregroundColor(ZTheme.accent)
         }
     }
 
     func errorOverlay(_ err: String) -> some View {
         VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle").font(.system(size: 44, weight: .ultraLight)).foregroundColor(ZTheme.danger)
-            Text(err).font(.system(size: 14)).foregroundColor(.white.opacity(0.6)).multilineTextAlignment(.center).padding(.horizontal, 32)
-            Button("Retry") { Task { await loadInitialChapter() } }
-                .font(.system(size: 15, weight: .semibold)).foregroundColor(ZTheme.bg).padding(.horizontal, 24).padding(.vertical, 10).background(ZTheme.accent).clipShape(RoundedRectangle(cornerRadius: 10))
-            Button("Go Back") { dismiss() }.foregroundColor(ZTheme.accent)
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 44, weight: .ultraLight))
+                .foregroundColor(ZTheme.danger)
+            Text(err)
+                .font(.system(size: 14))
+                .foregroundColor(.white.opacity(0.6))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .environment(\.layoutDirection, .rightToLeft)
+            Button("إعادة المحاولة") {
+                retryCount += 1
+                Task { await loadInitialChapter() }
+            }
+            .font(.system(size: 15, weight: .bold))
+            .foregroundColor(ZTheme.bg)
+            .padding(.horizontal, 24).padding(.vertical, 10)
+            .background(ZTheme.goldGradient)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            Button("رجوع") { dismiss() }
+                .foregroundColor(ZTheme.accent)
         }
     }
 
+    // FIX: أولاً تحقق من التحميلات المحلية
     func loadInitialChapter() async {
-        isLoading = true; errorMessage = nil
+        isLoading = true
+        errorMessage = nil
+
+        // تحقق من الملفات المحملة أولاً
+        if let localPages = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) {
+            await MainActor.run {
+                allPages = localPages.map { (chapterSlug: chapter.slug, url: $0) }
+                chapterBoundaries = [(slug: chapter.slug, startIndex: 0)]
+                loadedChapters = [chapter.slug]
+                isLoading = false
+            }
+            return
+        }
+
         do {
             let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
             await MainActor.run {
@@ -195,9 +248,15 @@ struct ReaderView: View {
                 isLoading = false
             }
         } catch ZMangaError.cloudflareChallenge {
-            await MainActor.run { errorMessage = "Cloudflare verification required. Go back and complete the verification."; isLoading = false }
+            await MainActor.run {
+                errorMessage = "مطلوب تحقق Cloudflare. ارجع وأكمل التحقق."
+                isLoading = false
+            }
         } catch {
-            await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                isLoading = false
+            }
         }
     }
 
@@ -211,9 +270,15 @@ struct ReaderView: View {
 
         await MainActor.run { loadingNextChapter = true }
         do {
-            let urls = try await MangaService.shared.fetchChapterPages(
-                mangaSlug: manga.slug, chapterSlug: nextChapter.slug
-            )
+            // تحقق من الملفات المحملة أولاً
+            let urls: [String]
+            if let local = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug) {
+                urls = local
+            } else {
+                urls = try await MangaService.shared.fetchChapterPages(
+                    mangaSlug: manga.slug, chapterSlug: nextChapter.slug
+                )
+            }
             await MainActor.run {
                 let startIndex = allPages.count
                 allPages.append(contentsOf: urls.map { (chapterSlug: nextChapter.slug, url: $0) })
@@ -255,10 +320,24 @@ struct MangaPageImage: View {
     let url: String
 
     var body: some View {
-        CachedAsyncImage(url: URL(string: url))
-            .scaledToFit()
-            .frame(maxWidth: .infinity)
-            .background(Color.black)
+        Group {
+            if url.hasPrefix("/") || url.hasPrefix("file://") {
+                // ملف محلي
+                if let uiImage = UIImage(contentsOfFile: url) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Color.black.frame(height: 200)
+                }
+            } else {
+                CachedAsyncImage(url: URL(string: url))
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Color.black)
     }
 }
 
@@ -269,16 +348,17 @@ struct ChapterSeparator: View {
     var body: some View {
         HStack(spacing: 12) {
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-            Text("Chapter \(number)")
-                .font(.system(size: 12, weight: .semibold))
+            Text("فصل \(number)")
+                .font(.system(size: 12, weight: .bold))
                 .foregroundColor(ZTheme.accent)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(ZTheme.accent.opacity(0.1))
                 .overlay(
-                    Capsule().stroke(ZTheme.accent.opacity(0.3), lineWidth: 1)
+                    Capsule().stroke(ZTheme.accent.opacity(0.4), lineWidth: 1)
                 )
                 .clipShape(Capsule())
+                .environment(\.layoutDirection, .rightToLeft)
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
         }
         .padding(.horizontal, 20)
