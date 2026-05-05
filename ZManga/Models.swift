@@ -15,16 +15,12 @@ struct Manga: Identifiable, Codable, Hashable {
     var author: String
     var artist: String
 
-    // يُستخدم للبطاقات أثناء التحميل (latest)
     var isPlaceholder: Bool = false
-
-    // حقول إضافية لآخر التحديثات
     var latestChapterNumber: String?
     var lastUpdated: String?
 
-    /// إزالة أنماط الصور المصغرة للحصول على رابط الصورة الأصلية
     var highQualityCoverURL: String {
-        let patterns = ["-110x150", "-150x200", "-200x300", "-300x450"]
+        let patterns = ["-110x150", "-150x200", "-200x300", "-300x450", "-193x278", "-350x476"]
         var url = coverURL
         for pattern in patterns {
             if url.contains(pattern) {
@@ -214,7 +210,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (مُحسَّن: يعالج nil URL والتحميل البطيء)
+// MARK: - Cached Async Image (محسن ليتجاهل الشعارات)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -256,10 +252,24 @@ struct CachedAsyncImage: View {
                 loadFailed = true
                 return
             }
+            // تجاهل روابط الشعارات والأيقونات
+            let urlStr = url.absoluteString.lowercased()
+            if urlStr.contains("logo") || urlStr.contains("icon") ||
+               urlStr.contains("lekmanga.png") || urlStr.contains("512.png") ||
+               urlStr.contains("favicon") || urlStr.contains("cropped") {
+                isLoading = false
+                loadFailed = true
+                return
+            }
             do {
                 let (data, _) = try await session.data(from: url)
                 if let uiImage = UIImage(data: data) {
-                    image = uiImage
+                    // تأكد أن الصورة كبيرة (ليست أيقونة)
+                    if uiImage.size.width > 50 && uiImage.size.height > 50 {
+                        image = uiImage
+                    } else {
+                        loadFailed = true
+                    }
                 } else {
                     loadFailed = true
                 }
