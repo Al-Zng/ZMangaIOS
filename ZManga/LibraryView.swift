@@ -105,23 +105,12 @@ struct LibraryCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
-                AsyncImage(url: URL(string: manga.coverURL)) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    case .failure:
-                        ZTheme.card.overlay(
-                            Image(systemName: "photo").foregroundColor(ZTheme.textTertiary)
-                        )
-                    default:
-                        ZTheme.card.overlay(ProgressView().tint(ZTheme.accent).scaleEffect(0.6))
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .aspectRatio(2/3, contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                    .aspectRatio(2/3, contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
 
-                // Heart indicator
                 Image(systemName: "heart.fill")
                     .font(.system(size: 10))
                     .foregroundColor(ZTheme.accent)
