@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MangaDetailView: View {
     @EnvironmentObject var store: AppStore
+    @StateObject private var downloadManager = DownloadManager.shared
     let slug: String
     var preloadTitle: String = ""
     var preloadCover: String = ""
@@ -13,12 +14,14 @@ struct MangaDetailView: View {
     @State private var showReader = false
     @State private var chapterSortAsc = false
     @State private var showChapterError = false
+    @State private var downloadingChapter: String? = nil
+    @State private var showDownloads = false
 
     var sortedChapters: [Chapter] {
         guard let m = manga else { return [] }
         return chapterSortAsc
-            ? m.chapters.sorted { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }
-            : m.chapters.sorted { (Int($0.number) ?? 0) > (Int($1.number) ?? 0) }
+            ? m.chapters.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
+            : m.chapters.sorted { (Double($0.number) ?? 0) > (Double($1.number) ?? 0) }
     }
 
     var body: some View {
@@ -39,15 +42,17 @@ struct MangaDetailView: View {
         .toolbar {
             if let manga = manga {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        if store.isInLibrary(manga) {
-                            store.removeFromLibrary(manga)
-                        } else {
-                            store.addToLibrary(manga)
+                    HStack(spacing: 12) {
+                        Button {
+                            if store.isInLibrary(manga) {
+                                store.removeFromLibrary(manga)
+                            } else {
+                                store.addToLibrary(manga)
+                            }
+                        } label: {
+                            Image(systemName: store.isInLibrary(manga) ? "heart.fill" : "heart")
+                                .foregroundColor(store.isInLibrary(manga) ? ZTheme.accent : ZTheme.textSecondary)
                         }
-                    } label: {
-                        Image(systemName: store.isInLibrary(manga) ? "heart.fill" : "heart")
-                            .foregroundColor(store.isInLibrary(manga) ? ZTheme.accent : ZTheme.textSecondary)
                     }
                 }
             }
@@ -64,19 +69,21 @@ struct MangaDetailView: View {
                             Image(systemName: "exclamationmark.triangle")
                                 .font(.system(size: 44, weight: .ultraLight))
                                 .foregroundColor(ZTheme.danger)
-                            Text("Chapter data missing")
+                            Text("بيانات الفصل غير مكتملة")
                                 .foregroundColor(.white)
-                            Button("Close") { showReader = false }
+                                .environment(\.layoutDirection, .rightToLeft)
+                            Button("إغلاق") { showReader = false }
                                 .foregroundColor(ZTheme.accent)
                         }
                     }
                 }
             }
         }
-        .alert("No Chapter Available", isPresented: $showChapterError) {
-            Button("OK", role: .cancel) { }
+        .alert("لا يوجد فصول", isPresented: $showChapterError) {
+            Button("حسناً", role: .cancel) { }
         } message: {
-            Text("This manga has no readable chapters yet.")
+            Text("هذه المانجا ليس لها فصول متاحة حالياً.")
+                .environment(\.layoutDirection, .rightToLeft)
         }
         .task { await loadDetail() }
     }
@@ -84,14 +91,15 @@ struct MangaDetailView: View {
     var loadingState: some View {
         VStack(spacing: 20) {
             HStack(alignment: .top, spacing: 16) {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 10)
                     .fill(ZTheme.card)
                     .frame(width: 110, height: 155)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(preloadTitle.isEmpty ? "Loading..." : preloadTitle)
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text(preloadTitle.isEmpty ? "جاري التحميل..." : preloadTitle)
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(ZTheme.textPrimary)
+                        .environment(\.layoutDirection, .rightToLeft)
                     RoundedRectangle(cornerRadius: 4).fill(ZTheme.card).frame(height: 12)
                     RoundedRectangle(cornerRadius: 4).fill(ZTheme.card).frame(width: 80, height: 12)
                 }
@@ -108,11 +116,12 @@ struct MangaDetailView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 40, weight: .ultraLight))
                 .foregroundColor(ZTheme.danger)
-            Text(errorMessage ?? "Failed to load")
+            Text(errorMessage ?? "فشل التحميل")
                 .foregroundColor(ZTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
-            Button("Retry") { Task { await loadDetail() } }
+                .environment(\.layoutDirection, .rightToLeft)
+            Button("إعادة المحاولة") { Task { await loadDetail() } }
                 .foregroundColor(ZTheme.accent)
         }
     }
@@ -122,11 +131,11 @@ struct MangaDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 heroSection(manga: manga)
 
-                Divider().background(ZTheme.border).padding(.vertical, 20)
+                Divider().background(ZTheme.border)
 
                 if !manga.description.isEmpty {
                     descriptionSection(manga.description)
-                    Divider().background(ZTheme.border).padding(.vertical, 16)
+                    Divider().background(ZTheme.border)
                 }
 
                 chaptersHeader(count: manga.chapters.count)
@@ -136,17 +145,18 @@ struct MangaDetailView: View {
                         ChapterRow(
                             chapter: chapter,
                             manga: manga,
-                            progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug }
+                            progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug },
+                            downloadManager: downloadManager
                         ) {
-                            // تأكيد أن الفصل موجود فعلاً
-                            guard let realChapter = manga.chapters.first(where: { $0.id == chapter.id }) else {
-                                showChapterError = true
-                                return
+                            // FIX: استخدام الفصل مباشرة بدون guard غير ضروري
+                            selectedChapter = chapter
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                showReader = true
                             }
-                            selectedChapter = realChapter
-                            showReader = true
+                        } onDownload: {
+                            Task { await downloadChapter(manga: manga, chapter: chapter) }
                         }
-                        Divider().background(ZTheme.border).padding(.leading, 16)
+                        Divider().background(ZTheme.border)
                     }
                 }
 
@@ -156,119 +166,183 @@ struct MangaDetailView: View {
     }
 
     func heroSection(manga: Manga) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
-                .frame(width: 110, height: 155)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
+        VStack(spacing: 0) {
+            // Cover background blur
+            ZStack(alignment: .bottom) {
+                CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                    .scaledToFill()
+                    .frame(height: 220)
+                    .clipped()
+                    .overlay(
+                        LinearGradient(
+                            colors: [ZTheme.bg.opacity(0.2), ZTheme.bg.opacity(0.7), ZTheme.bg],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .blur(radius: 0)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(manga.title)
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundColor(ZTheme.textPrimary)
-                    .lineLimit(3)
+                // Content overlay
+                HStack(alignment: .bottom, spacing: 14) {
+                    CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                        .frame(width: 110, height: 155)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(ZTheme.accent.opacity(0.4), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.6), radius: 8, y: 4)
 
-                if !manga.author.isEmpty {
-                    Text(manga.author)
-                        .font(.system(size: 13))
-                        .foregroundColor(ZTheme.textSecondary)
-                }
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Text(manga.title)
+                            .font(.system(size: 18, weight: .black))
+                            .foregroundColor(ZTheme.textPrimary)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.trailing)
+                            .environment(\.layoutDirection, .rightToLeft)
 
-                HStack(spacing: 6) {
-                    if !manga.status.isEmpty {
-                        StatusBadge(text: manga.status)
-                    }
-                    if !manga.rating.isEmpty {
-                        HStack(spacing: 3) {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(ZTheme.accent)
-                            Text(manga.rating)
-                                .font(.system(size: 12, weight: .medium))
+                        if !manga.author.isEmpty {
+                            Text(manga.author)
+                                .font(.system(size: 12))
                                 .foregroundColor(ZTheme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        HStack(spacing: 6) {
+                            if !manga.rating.isEmpty {
+                                HStack(spacing: 3) {
+                                    Text(manga.rating)
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(ZTheme.accent)
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(ZTheme.accent)
+                                }
+                            }
+                            if !manga.status.isEmpty {
+                                StatusBadge(text: manga.status)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+
+                        if !manga.genres.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 5) {
+                                    ForEach(manga.genres.prefix(4), id: \.self) { genre in
+                                        Text(genre)
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(ZTheme.accent)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(ZTheme.accentDim)
+                                            .overlay(
+                                                Capsule()
+                                                    .stroke(ZTheme.accent.opacity(0.3), lineWidth: 0.5)
+                                            )
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity)
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            }
 
-                if !manga.genres.isEmpty {
-                    FlowLayout(spacing: 5) {
-                        ForEach(manga.genres, id: \.self) { genre in
-                            Text(genre)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(ZTheme.accent)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(ZTheme.accentDim)
-                                .clipShape(Capsule())
-                        }
-                    }
-                }
-
-                // زر القراءة مع تحقق إضافي
-                if let firstChapter = manga.chapters.max(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) {
+            // Action buttons
+            HStack(spacing: 10) {
+                if let _ = manga.chapters.first {
                     Button {
                         guard !manga.chapters.isEmpty else {
                             showChapterError = true
                             return
                         }
-                        let target = manga.chapters.min(by: { (Int($0.number) ?? 0) < (Int($1.number) ?? 0) }) ?? firstChapter
+                        // أول فصل (الأقل رقماً) أو المتابعة
+                        let target = manga.chapters.min(by: { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }) ?? manga.chapters[0]
                         if let progress = store.history.first(where: { $0.mangaSlug == manga.slug }) {
-                            let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) ?? target
+                            // FIX: البحث عن الفصل بالـ slug بشكل أدق
+                            let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug })
+                                ?? manga.chapters.first(where: { $0.number == progress.chapterNumber })
+                                ?? target
                             selectedChapter = historyChapter
                         } else {
                             selectedChapter = target
                         }
-                        showReader = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            showReader = true
+                        }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 11))
-                            Text(store.history.first(where: { $0.mangaSlug == manga.slug }) != nil ? "Continue" : "Start Reading")
-                                .font(.system(size: 13, weight: .semibold))
+                            Image(systemName: store.history.first(where: { $0.mangaSlug == manga.slug }) != nil ? "play.fill" : "book.fill")
+                                .font(.system(size: 12))
+                            Text(store.history.first(where: { $0.mangaSlug == manga.slug }) != nil ? "واصل القراءة" : "ابدأ القراءة")
+                                .font(.system(size: 14, weight: .bold))
                         }
                         .foregroundColor(ZTheme.bg)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(ZTheme.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(ZTheme.goldGradient)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+
+                    Button {
+                        if store.isInLibrary(manga) {
+                            store.removeFromLibrary(manga)
+                        } else {
+                            store.addToLibrary(manga)
+                        }
+                    } label: {
+                        Image(systemName: store.isInLibrary(manga) ? "heart.fill" : "heart")
+                            .font(.system(size: 16))
+                            .foregroundColor(store.isInLibrary(manga) ? ZTheme.accent : ZTheme.textSecondary)
+                            .frame(width: 48, height: 44)
+                            .background(ZTheme.card)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(ZTheme.border, lineWidth: 1)
+                            )
                     }
                 } else {
-                    Text("No chapters available")
+                    Text("لا يوجد فصول متاحة")
                         .font(.system(size: 13))
                         .foregroundColor(ZTheme.textSecondary)
-                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .environment(\.layoutDirection, .rightToLeft)
                 }
             }
-            Spacer()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        .padding(20)
     }
 
     func descriptionSection(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Synopsis")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(ZTheme.textSecondary)
-                .tracking(2)
-                .padding(.horizontal, 20)
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack {
+                Spacer()
+                Text("القصة")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(ZTheme.accent)
+                    .tracking(0.5)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
 
             Text(text)
-                .font(.system(size: 14))
+                .font(.system(size: 13))
                 .foregroundColor(ZTheme.textSecondary)
-                .lineSpacing(4)
-                .padding(.horizontal, 20)
+                .lineSpacing(5)
+                .multilineTextAlignment(.trailing)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 14)
+                .environment(\.layoutDirection, .rightToLeft)
         }
     }
 
     func chaptersHeader(count: Int) -> some View {
         HStack {
-            Text("\(count) CHAPTERS")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(ZTheme.textSecondary)
-                .tracking(2)
-
-            Spacer()
-
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     chapterSortAsc.toggle()
@@ -277,14 +351,22 @@ struct MangaDetailView: View {
                 HStack(spacing: 4) {
                     Image(systemName: chapterSortAsc ? "arrow.up" : "arrow.down")
                         .font(.system(size: 11))
-                    Text(chapterSortAsc ? "Oldest" : "Newest")
+                    Text(chapterSortAsc ? "الأقدم" : "الأحدث")
                         .font(.system(size: 12))
                 }
                 .foregroundColor(ZTheme.textSecondary)
             }
+
+            Spacer()
+
+            Text("\(count) فصل")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(ZTheme.textPrimary)
+                .environment(\.layoutDirection, .rightToLeft)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(ZTheme.surface)
     }
 
     func loadDetail() async {
@@ -305,50 +387,109 @@ struct MangaDetailView: View {
             }
         }
     }
+
+    func downloadChapter(manga: Manga, chapter: Chapter) async {
+        // جلب الصفحات أولاً ثم التحميل
+        do {
+            let pages = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+            await DownloadManager.shared.downloadChapter(manga: manga, chapter: chapter, pages: pages)
+        } catch {
+            print("Download failed: \(error)")
+        }
+    }
 }
 
-// MARK: - Chapter Row
+// MARK: - Chapter Row (مع زر تحميل)
 struct ChapterRow: View {
     let chapter: Chapter
     let manga: Manga
     let progress: ReadingProgress?
+    @ObservedObject var downloadManager: DownloadManager
     let action: () -> Void
+    let onDownload: () -> Void
 
     var isRead: Bool { progress != nil }
+    var isDownloaded: Bool { downloadManager.isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug) }
+    var isDownloading: Bool { downloadManager.isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) }
+    var dlProgress: Double { downloadManager.progress(mangaSlug: manga.slug, chapterSlug: chapter.slug) }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text("Chapter \(chapter.number)")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(isRead ? ZTheme.textTertiary : ZTheme.textPrimary)
-
-                        if let p = progress {
-                            Text("· p.\(p.pageIndex + 1)")
-                                .font(.system(size: 12))
-                                .foregroundColor(ZTheme.accent)
+        HStack(spacing: 0) {
+            // Download button
+            Button {
+                if isDownloaded {
+                    downloadManager.deleteChapter(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                } else if !isDownloading {
+                    onDownload()
+                }
+            } label: {
+                ZStack {
+                    if isDownloading {
+                        ZStack {
+                            Circle()
+                                .stroke(ZTheme.border, lineWidth: 1.5)
+                                .frame(width: 28, height: 28)
+                            Circle()
+                                .trim(from: 0, to: dlProgress)
+                                .stroke(ZTheme.accent, lineWidth: 1.5)
+                                .frame(width: 28, height: 28)
+                                .rotationEffect(.degrees(-90))
+                                .animation(.linear, value: dlProgress)
                         }
-                    }
-
-                    if !chapter.date.isEmpty {
-                        Text(chapter.date)
-                            .font(.system(size: 11))
+                    } else if isDownloaded {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(ZTheme.accent)
+                    } else {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 22))
                             .foregroundColor(ZTheme.textTertiary)
                     }
                 }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(ZTheme.textTertiary)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .background(ZTheme.bg)
+            .frame(width: 44, height: 44)
+            .padding(.leading, 8)
+
+            // Chapter info (clickable)
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        HStack(spacing: 6) {
+                            if let p = progress {
+                                Text("ص.\(p.pageIndex + 1)")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(ZTheme.accent)
+                            }
+                            Text("فصل \(chapter.number)")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(isRead ? ZTheme.textTertiary : ZTheme.textPrimary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+
+                        if !chapter.date.isEmpty {
+                            Text(chapter.date)
+                                .font(.system(size: 11))
+                                .foregroundColor(ZTheme.textTertiary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }
+
+                    if isDownloaded {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(ZTheme.accent.opacity(0.5))
+                    }
+
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(ZTheme.textTertiary)
+                }
+                .padding(.vertical, 14)
+                .padding(.trailing, 16)
+                .frame(maxWidth: .infinity)
+            }
         }
+        .background(ZTheme.bg)
     }
 }
 
@@ -358,17 +499,17 @@ struct StatusBadge: View {
 
     var color: Color {
         text.lowercased().contains("مستمر") || text.lowercased().contains("ongoing")
-            ? Color(hex: "#4CAF82")
+            ? ZTheme.success
             : ZTheme.textTertiary
     }
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
+            .font(.system(size: 10, weight: .bold))
             .foregroundColor(color)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(color.opacity(0.12))
+            .background(color.opacity(0.15))
             .clipShape(Capsule())
     }
 }
