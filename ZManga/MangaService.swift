@@ -6,17 +6,66 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lek-manga.net"
 
+    // MARK: - WebView based HTML fetcher (يحل محل URLSession)
+    private var webView: WKWebView?
+    private var pendingCompletions: [(Result<String, Error>) -> Void] = []
+    private var isLoading = false
+
+    private func ensureWebView() -> WKWebView {
+        if let wv = webView { return wv }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default() // تشارك الكوكيز مع Cloudflare
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        self.webView = wv
+        return wv
+    }
+
+    private func fetchHTMLUsingWebView(urlString: String) async throws -> String {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+
+        let webView = ensureWebView()
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+
+        // تحميل الصفحة (إذا لم تكن محملة مسبقًا)
+        if webView.url != url {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                webView.load(request)
+                // انتظر حتى ينتهي التحميل الأول
+                var observer: NSKeyValueObservation?
+                observer = webView.observe(\.isLoading, options: [.new]) { _, change in
+                    if change.newValue == false {
+                        observer?.invalidate()
+                        continuation.resume()
+                    }
+                }
+            }
+        }
+
+        // استخراج HTML الحالي
+        return try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                if let html = result as? String {
+                    continuation.resume(returning: html)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+    }
+
     // MARK: - Fetch Latest Manga
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=latest&page=\(page)"
-        let html = try await fetchHTML(from: url)
+        let html = try await fetchHTMLUsingWebView(urlString: url)
         return parseMangaList(html: html)
     }
 
     // MARK: - Fetch Popular
     func fetchPopular(page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga/?m_orderby=views&page=\(page)"
-        let html = try await fetchHTML(from: url)
+        let html = try await fetchHTMLUsingWebView(urlString: url)
         return parseMangaList(html: html)
     }
 
@@ -24,75 +73,29 @@ class MangaService: NSObject, ObservableObject {
     func search(query: String, page: Int = 1) async throws -> [Manga] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let url = "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)"
-        let html = try await fetchHTML(from: url)
+        let html = try await fetchHTMLUsingWebView(urlString: url)
         return parseMangaList(html: html)
     }
 
     // MARK: - Fetch Manga Detail
     func fetchDetail(slug: String) async throws -> Manga {
         let url = "\(baseURL)/manga/\(slug)/"
-        let html = try await fetchHTML(from: url)
+        let html = try await fetchHTMLUsingWebView(urlString: url)
         return parseMangaDetail(html: html, slug: slug)
     }
 
     // MARK: - Fetch Chapter Pages
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
-        let html = try await fetchHTML(from: url)
+        let html = try await fetchHTMLUsingWebView(urlString: url)
         return parseChapterPages(html: html)
     }
 
     // MARK: - Fetch by Genre
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
         let url = "\(baseURL)/manga-genre/\(genre)/?page=\(page)"
-        let html = try await fetchHTML(from: url)
+        let html = try await fetchHTMLUsingWebView(urlString: url)
         return parseMangaList(html: html)
-    }
-
-    // MARK: - Core HTML Fetcher
-    func fetchHTML(from urlString: String) async throws -> String {
-        guard let url = URL(string: urlString) else {
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        request.setValue("ar,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        request.setValue(baseURL, forHTTPHeaderField: "Referer")
-
-        let config = URLSessionConfiguration.default
-        config.httpCookieStorage = HTTPCookieStorage.shared
-        config.httpShouldSetCookies = true
-        config.httpCookieAcceptPolicy = .always
-        let session = URLSession(configuration: config)
-
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-
-        if httpResponse.statusCode == 403 || httpResponse.statusCode == 503 {
-            await MainActor.run {
-                AppStore.currentStore?.triggerCloudflare(url: url)
-            }
-            throw ZMangaError.cloudflareChallenge
-        }
-
-        guard let html = String(data: data, encoding: .utf8) ??
-                         String(data: data, encoding: .isoLatin1) else {
-            throw URLError(.cannotDecodeContentData)
-        }
-
-        if html.contains("Just a moment") || html.contains("cf-browser-verification") || html.contains("Checking your browser") {
-            await MainActor.run {
-                AppStore.currentStore?.triggerCloudflare(url: url)
-            }
-            throw ZMangaError.cloudflareChallenge
-        }
-
-        return html
     }
 
     // MARK: - Parse Manga List
@@ -223,7 +226,7 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - Helpers
-    func firstCapture(pattern: String, in text: String) -> String? {
+    private func firstCapture(pattern: String, in text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         let ns = text as NSString
         guard let m = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
@@ -233,12 +236,12 @@ class MangaService: NSObject, ObservableObject {
         return ns.substring(with: r)
     }
 
-    func stripHTML(_ html: String) -> String {
+    private func stripHTML(_ html: String) -> String {
         html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func htmlDecode(_ str: String) -> String {
+    private func htmlDecode(_ str: String) -> String {
         str.replacingOccurrences(of: "&amp;", with: "&")
            .replacingOccurrences(of: "&lt;", with: "<")
            .replacingOccurrences(of: "&gt;", with: ">")
@@ -246,20 +249,5 @@ class MangaService: NSObject, ObservableObject {
            .replacingOccurrences(of: "&#039;", with: "'")
            .replacingOccurrences(of: "&nbsp;", with: " ")
            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-// MARK: - Errors
-enum ZMangaError: LocalizedError {
-    case cloudflareChallenge
-    case parsingFailed
-    case networkError(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .cloudflareChallenge: return "Cloudflare verification required"
-        case .parsingFailed: return "Failed to parse content"
-        case .networkError(let msg): return msg
-        }
     }
 }
