@@ -14,12 +14,15 @@ struct Manga: Identifiable, Codable, Hashable {
     var chapters: [Chapter]
     var author: String
     var artist: String
+
+    // يُستخدم للبطاقات أثناء التحميل (latest)
+    var isPlaceholder: Bool = false
+
+    // حقول إضافية لآخر التحديثات
     var latestChapterNumber: String?
     var lastUpdated: String?
 
-    // يُستخدم لحفظ الهوية أثناء التحميل
-    var isPlaceholder: Bool = false
-
+    /// إزالة أنماط الصور المصغرة للحصول على رابط الصورة الأصلية
     var highQualityCoverURL: String {
         let patterns = ["-110x150", "-150x200", "-200x300", "-300x450"]
         var url = coverURL
@@ -112,11 +115,6 @@ class AppStore: ObservableObject {
     init() {
         loadHistory()
         loadLibrary()
-    }
-
-    // هنا مكان الدالة الصحيح
-    func retryAfterCloudflare() {
-        reloadTrigger += 1
     }
 
     func saveProgress(_ progress: ReadingProgress) {
@@ -216,11 +214,12 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image
+// MARK: - Cached Async Image (مُحسَّن: يعالج nil URL والتحميل البطيء)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var isLoading = true
+    @State private var loadFailed = false
 
     private static let cache = URLCache(
         memoryCapacity: 50 * 1024 * 1024,
@@ -241,7 +240,7 @@ struct CachedAsyncImage: View {
                     .resizable()
                     .interpolation(.high)
                     .antialiased(true)
-            } else if isLoading {
+            } else if isLoading && !loadFailed {
                 Rectangle()
                     .fill(Color(white: 0.1))
                     .overlay(ProgressView().tint(ZTheme.accent))
@@ -252,11 +251,21 @@ struct CachedAsyncImage: View {
             }
         }
         .task {
-            guard let url = url else { return }
+            guard let url = url else {
+                isLoading = false
+                loadFailed = true
+                return
+            }
             do {
                 let (data, _) = try await session.data(from: url)
-                if let uiImage = UIImage(data: data) { image = uiImage }
-            } catch {}
+                if let uiImage = UIImage(data: data) {
+                    image = uiImage
+                } else {
+                    loadFailed = true
+                }
+            } catch {
+                loadFailed = true
+            }
             isLoading = false
         }
     }
