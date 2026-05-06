@@ -7,88 +7,133 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    private var webView: WKWebView?
+    // WebView مخصص فقط لتحميل صفحات الفصول (lazy loading)
+    private var chapterWebView: WKWebView?
 
-    private func getWebView() -> WKWebView {
-        if let wv = webView { return wv }
+    private func getChapterWebView() -> WKWebView {
+        if let wv = chapterWebView { return wv }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
-        let wv = WKWebView(frame: .zero, configuration: config)
+        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        self.webView = wv
+        self.chapterWebView = wv
         return wv
     }
 
-    // MARK: - Navigation Delegate لـ fetchHTML
-    private class FetchNavDelegate: NSObject, WKNavigationDelegate {
-        private let continuation: CheckedContinuation<String, Error>
-        private let url: URL
-        private var finished = false
+    // MARK: - fetchHTML عبر URLSession مباشرة (أسرع بكثير من WKWebView)
+    private func fetchHTML(urlString: String) async throws -> String {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
-        init(continuation: CheckedContinuation<String, Error>, url: URL) {
-            self.continuation = continuation
-            self.url = url
+        // نسخ كوكيز Cloudflare من WKWebView إلى URLSession
+        let wkCookies: [HTTPCookie] = await withCheckedContinuation { cont in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cont.resume(returning: $0) }
         }
+        for c in wkCookies { HTTPCookieStorage.shared.setCookie(c) }
+
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue("https://lekmanga.site", forHTTPHeaderField: "Referer")
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue("ar,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+
+        // أرسل الكوكيز يدوياً
+        let cookieHeader = (HTTPCookieStorage.shared.cookies(for: url) ?? [])
+            .map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        if !cookieHeader.isEmpty {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
+
+        let config = URLSessionConfiguration.default
+        config.httpCookieStorage = HTTPCookieStorage.shared
+        config.httpShouldSetCookies = true
+        let session = URLSession(configuration: config)
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResp = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        // إذا Cloudflare رجع 403 أو صفحة تحقق
+        let html = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
+
+        let isCloudflare = httpResp.statusCode == 403 ||
+            html.contains("Just a moment") ||
+            html.contains("cf-browser-verification") ||
+            html.contains("Checking your browser") ||
+            html.contains("Attention Required")
+
+        if isCloudflare {
+            // نحتاج WKWebView لتجاوز Cloudflare
+            let wvHTML = try await fetchHTMLViaWebView(url: url)
+            if wvHTML.contains("Just a moment") || wvHTML.contains("Checking your browser") {
+                AppStore.currentStore?.triggerCloudflare(url: url)
+                throw ZMangaError.cloudflareChallenge
+            }
+            return wvHTML
+        }
+
+        return html
+    }
+
+    // MARK: - Navigation Delegate
+    private class NavDelegate: NSObject, WKNavigationDelegate {
+        var onFinish: (() -> Void)?
+        var onError: ((Error) -> Void)?
+        private var done = false
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard !finished else { return }
-            finished = true
-            webView.navigationDelegate = nil
-            webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
-                guard let self = self else { return }
-                if let html = result as? String {
-                    if html.contains("Just a moment") ||
-                       html.contains("cf-browser-verification") ||
-                       html.contains("Checking your browser") ||
-                       html.contains("Attention Required") {
-                        AppStore.currentStore?.triggerCloudflare(url: self.url)
-                        self.continuation.resume(throwing: ZMangaError.cloudflareChallenge)
-                    } else {
-                        self.continuation.resume(returning: html)
-                    }
-                } else {
-                    self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                }
-            }
+            guard !done else { return }
+            done = true
+            onFinish?()
         }
-
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            guard !finished else { return }
-            // -999 = NSURLErrorCancelled يحدث عند stopLoading، نتجاهله ونكمل
+            guard !done else { return }
             let ns = error as NSError
-            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
-            finished = true
-            webView.navigationDelegate = nil
-            continuation.resume(throwing: error)
+            if ns.code == NSURLErrorCancelled { return }
+            done = true
+            onError?(error)
         }
-
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            guard !finished else { return }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
+            guard !done else { return }
             let ns = error as NSError
-            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
-            finished = true
-            webView.navigationDelegate = nil
-            continuation.resume(throwing: error)
+            if ns.code == NSURLErrorCancelled { return }
+            done = true
+            onError?(error)
         }
     }
 
-    private func fetchHTML(urlString: String) async throws -> String {
-        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-        let webView = getWebView()
+    private func fetchHTMLViaWebView(url: URL) async throws -> String {
+        let wv = getChapterWebView()
+        wv.navigationDelegate = nil
+        wv.stopLoading()
 
-        // أوقف التحميل السابق قبل تعيين الـ delegate الجديد
-        // لو عكسنا الترتيب، الـ stopLoading يرسل didFail(-999) للـ delegate الجديد فوراً
-        webView.navigationDelegate = nil
-        webView.stopLoading()
-
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let delegate = FetchNavDelegate(continuation: continuation, url: url)
-            webView.navigationDelegate = delegate
-            objc_setAssociatedObject(webView, "fetchDelegate", delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            webView.load(request)
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+            let nav = NavDelegate()
+            nav.onFinish = {
+                wv.navigationDelegate = nil
+                wv.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                    if let html = result as? String {
+                        cont.resume(returning: html)
+                    } else {
+                        cont.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                    }
+                }
+            }
+            nav.onError = { error in
+                wv.navigationDelegate = nil
+                cont.resume(throwing: error)
+            }
+            wv.navigationDelegate = nav
+            objc_setAssociatedObject(wv, "navDelegate", nav, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            var req = URLRequest(url: url)
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            wv.load(req)
         }
     }
 
@@ -117,56 +162,73 @@ class MangaService: NSObject, ObservableObject {
     }
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
-        let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+        let urlString = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
-        // 1. تحميل الصفحة أولاً للحصول على chapter_id
-        let html = try await fetchHTML(urlString: url)
+        // 1. جلب HTML أولاً عبر URLSession للحصول على chapter_id
+        let html = try await fetchHTML(urlString: urlString)
 
-        // 2. محاولة AJAX أولاً بنمط مرن لـ chapter_id
-        let chapterIdPattern = #"wp-manga-current-chap[^>]+data-id="(\d+)"|data-id="(\d+)"[^>]+wp-manga-current-chap"#
+        // 2. محاولة AJAX (الأسرع) — لا يحتاج WKWebView
+        let chapterIdPattern = #"(?:wp-manga-current-chap[^>]+data-id|data-id)="(\d+)""#
         if let chapterId = firstCapture(pattern: chapterIdPattern, in: html) {
             if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
                 return pages
             }
         }
 
-        // 3. الـ WebView محمّل بالفعل — الآن ننتظر حتى يُحقن lazy loading الصور في DOM
-        let webView = getWebView()
-        let waitJS = """
-        new Promise((resolve) => {
-            let attempts = 0;
-            const check = () => {
-                attempts++;
-                const imgs = document.querySelectorAll('.reading-content img');
-                const hasRealSrc = Array.from(imgs).some(img => {
-                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
-                    return src.startsWith('http') && !src.includes('data:image');
+        // 3. محاولة parse مباشر من HTML الأولي
+        let directPages = parseChapterPages(html: html)
+        if !directPages.isEmpty { return directPages }
+
+        // 4. آخر حل: WKWebView مع انتظار lazy loading
+        let wv = getChapterWebView()
+        wv.navigationDelegate = nil
+        wv.stopLoading()
+
+        // تحميل الصفحة في WKWebView وانتظار الـ lazy loading
+        let finalHTML = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+            let nav = NavDelegate()
+            nav.onFinish = {
+                wv.navigationDelegate = nil
+                // انتظر الـ lazy loading بعد didFinish
+                let waitJS = """
+                new Promise((resolve) => {
+                    let tries = 0;
+                    const check = () => {
+                        tries++;
+                        const imgs = document.querySelectorAll('.reading-content img');
+                        const ok = Array.from(imgs).some(img => {
+                            const s = img.dataset.lazySrc || img.dataset.src || img.src || '';
+                            return s.startsWith('http') && !s.includes('data:image');
+                        });
+                        if (ok || tries >= 15) resolve(tries);
+                        else setTimeout(check, 200);
+                    };
+                    setTimeout(check, 500);
                 });
-                if (hasRealSrc || attempts >= 30) resolve(attempts);
-                else setTimeout(check, 300);
-            };
-            // أعط الـ JS وقتاً ليبدأ
-            setTimeout(check, 800);
-        });
-        """
-
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
-        }
-
-        // 4. الآن اجلب الـ HTML بعد أن عمل الـ lazy loading
-        let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
-            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                if let html = result as? String {
-                    continuation.resume(returning: html)
-                } else {
-                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                """
+                wv.evaluateJavaScript(waitJS) { _, _ in
+                    wv.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                        if let html = result as? String {
+                            cont.resume(returning: html)
+                        } else {
+                            cont.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                        }
+                    }
                 }
             }
+            nav.onError = { error in
+                wv.navigationDelegate = nil
+                cont.resume(throwing: error)
+            }
+            wv.navigationDelegate = nav
+            objc_setAssociatedObject(wv, "navDelegate", nav, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            var req = URLRequest(url: url)
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            wv.load(req)
         }
 
-        let pages = parseChapterPages(html: updatedHTML)
-        return pages
+        return parseChapterPages(html: finalHTML)
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -179,42 +241,42 @@ class MangaService: NSObject, ObservableObject {
     private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
         guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
 
-        var request = URLRequest(url: ajaxURL)
+        var request = URLRequest(url: ajaxURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(baseURL, forHTTPHeaderField: "Referer")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        request.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent"
+        )
 
-        // نسخ الكوكيز من WebView إلى الطلب
-        let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
-        let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        // الكوكيز
+        let wkCookies: [HTTPCookie] = await withCheckedContinuation { cont in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cont.resume(returning: $0) }
+        }
+        for c in wkCookies { HTTPCookieStorage.shared.setCookie(c) }
+        let cookieHeader = (HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? [])
+            .map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        let body = "action=manga_get_chapter_img_list&chapter_id=\(chapterId)"
-        request.httpBody = body.data(using: .utf8)
+        request.httpBody = "action=manga_get_chapter_img_list&chapter_id=\(chapterId)".data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return []
-        }
+        guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 else { return [] }
 
-        // محاولة تفسير الـ response كـ JSON (مصفوفة أو كائن ببيانات)
-        if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
+        if let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            return arr.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
-        if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let images = jsonDict["data"] as? [[String: Any]] {
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let images = dict["data"] as? [[String: Any]] {
             return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
-
-        // إذا كان الـ response عبارة عن HTML (حالة نادرة)
         if let html = String(data: data, encoding: .utf8), html.contains("<img") {
             return parseChapterPages(html: html)
         }
-
         return []
     }
 
@@ -257,10 +319,9 @@ class MangaService: NSObject, ObservableObject {
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
-    // ✅ الإصلاح الوحيد هنا
     private func parseMangaSimple(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
-        let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
+        let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)\"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return results }
         let nsHtml = html as NSString
         regex.enumerateMatches(in: html, range: NSRange(location: 0, length: nsHtml.length)) { match, _, _ in
@@ -269,7 +330,6 @@ class MangaService: NSObject, ObservableObject {
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200, slug != "feed", !slug.contains("cdn-cgi") else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                // نبحث عن الصورة في نطاق 2000 حرف بعد رابط المانجا فقط
                 let searchRange = NSRange(location: match.range.location,
                                           length: min(nsHtml.length - match.range.location, 2000))
                 let allImgTags = extractHTMLTags(named: "img", from: nsHtml.substring(with: searchRange))
@@ -324,7 +384,7 @@ class MangaService: NSObject, ObservableObject {
             blockRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
                 let block = ns.substring(with: match.range(at: 1))
-                let linkPattern = #"href="(https?://[^/]+/manga/[^/]+/([^/]+)/)"#
+                let linkPattern = #"href="(https?://[^/]+/manga/[^/]+/([^/]+)/)""#
                 if let fullLink = firstCapture(pattern: linkPattern, in: block),
                    let url = URL(string: fullLink) {
                     let components = url.pathComponents
@@ -338,7 +398,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
         if chapters.isEmpty {
-            let chapLinkPattern = #"href="https?://[^/]+/manga/[^/]+/([\d]+(?:-[\d]+)?)/"[^>]*>\s*(?:<[^>]*>\s*)*(\d+)"#
+            let chapLinkPattern = #"href="https?://[^/]+/manga/[^/]+/([\d]+(?:-[\d]+)?)/\"[^>]*>\s*(?:<[^>]*>\s*)*(\d+)"#
             if let regex = try? NSRegularExpression(pattern: chapLinkPattern, options: [.caseInsensitive]) {
                 regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
                     guard let m = m, m.numberOfRanges >= 3 else { return }
@@ -356,7 +416,7 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (تجميع كل الصور دفعة واحدة)
+    // MARK: - Parse Chapter Pages
 
     private func parseChapterPages(html: String) -> [String] {
         let content = extractReadingContent(html: html)
@@ -373,7 +433,7 @@ class MangaService: NSObject, ObservableObject {
             let tag = nsContent.substring(with: match.range)
             let url = firstCapture(pattern: #"data-lazy-src="([^"]+)""#, in: tag)
                    ?? firstCapture(pattern: #"data-src="([^"]+)""#, in: tag)
-                   ?? firstCapture(pattern: #"src="([^"]+)""#, in: tag)
+                   ?? firstCapture(pattern: #"\bsrc="([^"]+)""#, in: tag)
             if let url = url?.trimmingCharacters(in: .whitespacesAndNewlines),
                url.hasPrefix("http"),
                !url.contains("data:image"),
@@ -388,73 +448,49 @@ class MangaService: NSObject, ObservableObject {
 
     private func extractReadingContent(html: String) -> String {
         let startPattern = #"<div[^>]+class="[^"]*reading-content[^"]*"[^>]*>"#
-        let endTag = "</div>"
-
         guard let startRegex = try? NSRegularExpression(pattern: startPattern, options: [.caseInsensitive]),
               let startMatch = startRegex.firstMatch(in: html, range: NSRange(location: 0, length: html.utf16.count)) else {
             return html
         }
-
         let startIndex = startMatch.range.location + startMatch.range.length
         let remaining = (html as NSString).substring(from: startIndex)
-
         var depth = 1
         var currentIndex = 0
         let nsRemaining = remaining as NSString
-
         while currentIndex < nsRemaining.length && depth > 0 {
             let remainingRange = NSRange(location: currentIndex, length: nsRemaining.length - currentIndex)
             if let nextDiv = firstMatchOf(pattern: #"</?div"#, in: nsRemaining, range: remainingRange) {
                 let tag = nsRemaining.substring(with: nextDiv.range)
-                if tag.hasPrefix("</") {
-                    depth -= 1
-                } else {
-                    depth += 1
-                }
+                depth += tag.hasPrefix("</") ? -1 : 1
                 currentIndex = nextDiv.range.location + nextDiv.range.length
-            } else {
-                break
-            }
+            } else { break }
         }
-
         if depth == 0 {
-            return nsRemaining.substring(to: currentIndex - endTag.count)
+            let endLen = "</div>".count
+            let cutAt = max(0, currentIndex - endLen)
+            return nsRemaining.substring(to: cutAt)
         }
-
         return remaining
     }
 
-    // MARK: - دوال مساعدة لاستخراج الصور
+    // MARK: - Image Helpers
 
     private func extractHTMLTags(named tagName: String, from html: String) -> [String] {
         let pattern = "<\(tagName)\\s[^>]*>"
         guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
-            return []
-        }
+                                                   options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return [] }
         let ns = html as NSString
-        return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).map {
-            ns.substring(with: $0.range)
-        }
+        return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) }
     }
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
         for tag in tags {
-            // data-lazy-src أولاً
-            if let dataLazy = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag) {
-                let url = dataLazy.trimmingCharacters(in: .whitespacesAndNewlines)
-                if url.hasPrefix("http") { return url }
-            }
-            // data-src
-            if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
-                let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
-                if url.hasPrefix("http") { return url }
-            }
-            // src
-            if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
-                let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
-                if url.hasPrefix("http") && !isLogoOnly(url) { return url }
-            }
+            if let url = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag),
+               url.hasPrefix("http") { return url }
+            if let url = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag),
+               url.hasPrefix("http") { return url }
+            if let url = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag),
+               url.hasPrefix("http"), !isLogoOnly(url) { return url }
         }
         return nil
     }
