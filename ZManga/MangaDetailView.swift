@@ -10,7 +10,6 @@ struct MangaDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var selectedChapter: Chapter? = nil
-    @State private var showReader = false
     @State private var chapterSortAsc = false
     @State private var showChapterError = false
     @State private var multiSelectMode = false
@@ -90,7 +89,11 @@ struct MangaDetailView: View {
         .fullScreenCover(item: $selectedChapter) { chapter in
             if let manga = manga {
                 let progress = store.history.first(where: { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug })
-                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters, initialPage: progress?.pageIndex ?? 0)
+                let localPages = DownloadManager.shared.isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                    ? DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                    : nil
+                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters,
+                           initialPage: progress?.pageIndex ?? 0, preloadedPages: localPages)
                     .environmentObject(store)
             } else {
                 ZStack {
@@ -404,7 +407,7 @@ struct MangaDetailView: View {
     }
 }
 
-// MARK: - Chapter Row (مع خيارات التحديد)
+// MARK: - ChapterRow (كاملة)
 struct ChapterRow: View {
     let chapter: Chapter
     let manga: Manga
@@ -498,13 +501,11 @@ struct ChapterRow: View {
 // MARK: - Status Badge
 struct StatusBadge: View {
     let text: String
-
     var color: Color {
         text.lowercased().contains("مستمر") || text.lowercased().contains("ongoing")
             ? Color(hex: "#4CAF82")
             : ZTheme.textTertiary
     }
-
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .semibold))
