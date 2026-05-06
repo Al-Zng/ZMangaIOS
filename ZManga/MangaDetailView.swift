@@ -41,6 +41,12 @@ struct MangaDetailView: View {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if let manga = manga {
                     Button {
+                        Task { await loadDetail() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(ZTheme.textSecondary)
+                    }
+                    Button {
                         if store.isInLibrary(manga) {
                             store.removeFromLibrary(manga)
                         } else {
