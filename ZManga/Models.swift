@@ -92,7 +92,7 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager
+// MARK: - Download Manager (مع غلاف وحجم)
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
@@ -107,7 +107,7 @@ class DownloadManager: ObservableObject {
         let chapterSlug: String
         let chapterNumber: String
         let mangaTitle: String
-        let mangaCover: String
+        let mangaCover: String          // ← الغلاف
         let pages: [String]
         let downloadedAt: Date
     }
@@ -161,15 +161,19 @@ class DownloadManager: ObservableObject {
                 try data.write(to: filePath)
                 localPaths.append(filePath.path)
             } catch {
-                localPaths.append(urlStr)
+                localPaths.append(urlStr) // fallback
             }
             activeDownloads[key] = Double(idx + 1) / Double(urls.count)
         }
 
         let downloaded = DownloadedChapter(
-            mangaSlug: manga.slug, chapterSlug: chapter.slug,
-            chapterNumber: chapter.number, mangaTitle: manga.title,
-            mangaCover: manga.coverURL, pages: localPaths, downloadedAt: Date()
+            mangaSlug: manga.slug,
+            chapterSlug: chapter.slug,
+            chapterNumber: chapter.number,
+            mangaTitle: manga.title,
+            mangaCover: manga.coverURL,
+            pages: localPaths,
+            downloadedAt: Date()
         )
         downloads[key] = downloaded
         activeDownloads.removeValue(forKey: key)
@@ -225,20 +229,15 @@ class DownloadManager: ObservableObject {
     }
 }
 
-// MARK: - Cloudflare Challenge (يدعم Identifiable)
-struct CloudflareChallenge: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
-// MARK: - AppStore
+// MARK: - AppStore (مع كاش المانجا)
 class AppStore: ObservableObject {
-    static var currentStore: AppStore?
+    static weak var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
     @Published var completed: [Manga] = []
-    @Published var activeChallenge: CloudflareChallenge? = nil
+    @Published var showCloudflareSheet = false
+    @Published var cloudflareURL: URL?
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
     @Published var cachedLatest: [Manga]?
@@ -308,10 +307,7 @@ class AppStore: ObservableObject {
     private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
     // MARK: - Cloudflare
-    func triggerCloudflare(url: URL) {
-        Logger.shared.log("Cloudflare triggered for URL: \(url.absoluteString)", category: "Cloudflare")
-        activeChallenge = CloudflareChallenge(url: url)
-    }
+    func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
     func triggerReload() { reloadTrigger += 1 }
 }
 
@@ -432,10 +428,11 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        let referer = "https://lekmanga.site/"
+        let referer = url.absoluteString.contains("lekstorm") ?
+            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
-        for i in 0..<3 {
-            attempt = i + 1
+        for _ in 0..<3 {
+            attempt += 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
@@ -448,19 +445,15 @@ struct CachedAsyncImage: View {
             }
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse {
-                    if httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
-                        await MainActor.run { image = img; isLoading = false }
-                        return
-                    } else if httpResp.statusCode == 403 {
-                        Logger.shared.log("Image 403: \(url.absoluteString)", category: "ImageLoader")
-                    }
+                if let httpResp = response as? HTTPURLResponse,
+                   httpResp.statusCode == 200,
+                   let img = UIImage(data: data),
+                   img.size.width > 0 {
+                    await MainActor.run { image = img; isLoading = false }
+                    return
                 }
             } catch {
-                Logger.shared.log("Image load error: \(error.localizedDescription) URL: \(url.absoluteString)", category: "ImageLoader")
-            }
-            if i < 2 {
-                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * Double(i + 1)))
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
         await MainActor.run { loadFailed = true; isLoading = false }

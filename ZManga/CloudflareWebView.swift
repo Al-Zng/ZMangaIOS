@@ -4,7 +4,6 @@ import WebKit
 // MARK: - Cloudflare Challenge Sheet
 struct CloudflareSheet: View {
     @EnvironmentObject var store: AppStore
-    let url: URL
     let onDismiss: () -> Void
 
     var body: some View {
@@ -36,11 +35,13 @@ struct CloudflareSheet: View {
 
                     Divider().background(ZTheme.border)
 
-                    CloudflareWebViewRepresentable(url: url) {
-                        store.cookiesReady = true
-                        store.activeChallenge = nil
-                        store.triggerReload()
-                        onDismiss()
+                    if let url = store.cloudflareURL {
+                        CloudflareWebViewRepresentable(url: url) {
+                            store.cookiesReady = true
+                            store.showCloudflareSheet = false
+                            store.triggerReload()
+                            onDismiss()
+                        }
                     }
                 }
             }
@@ -48,21 +49,20 @@ struct CloudflareSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
-                        Logger.shared.log("Cloudflare sheet cancelled by user.", category: "Cloudflare")
-                        store.activeChallenge = nil
+                        store.showCloudflareSheet = false
                     }
                     .foregroundColor(ZTheme.accent)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
+                        // نسخ جميع الكوكيز فوراً
                         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
                             for cookie in cookies {
                                 HTTPCookieStorage.shared.setCookie(cookie)
                             }
                             DispatchQueue.main.async {
-                                Logger.shared.log("Cloudflare challenge completed manually. Cookies copied.", category: "Cloudflare")
                                 store.cookiesReady = true
-                                store.activeChallenge = nil
+                                store.showCloudflareSheet = false
                                 store.triggerReload()
                                 onDismiss()
                             }
@@ -89,7 +89,6 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
         webView.backgroundColor = UIColor(ZTheme.bg)
         webView.scrollView.backgroundColor = UIColor(ZTheme.bg)
         webView.load(URLRequest(url: url))
-        Logger.shared.log("Cloudflare WebView loaded URL: \(url.absoluteString)", category: "Cloudflare")
         return webView
     }
 
@@ -147,7 +146,6 @@ struct CloudflareWebViewRepresentable: UIViewRepresentable {
         private func copyCookiesAndSucceed(_ webView: WKWebView) {
             guard !hasCompleted else { return }
             hasCompleted = true
-            Logger.shared.log("Cloudflare verification passed automatically.", category: "Cloudflare")
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
                 for cookie in cookies {
                     HTTPCookieStorage.shared.setCookie(cookie)

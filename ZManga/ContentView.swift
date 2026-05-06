@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
 
     init() {
+        AppStore.currentStore = nil
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = UIColor(ZTheme.surface)
@@ -59,9 +60,8 @@ struct ContentView: View {
         .onAppear {
             AppStore.currentStore = store
         }
-        .sheet(item: $store.activeChallenge) { challenge in
-            CloudflareSheet(url: challenge.url) {}
-                .environmentObject(store)
+        .sheet(isPresented: $store.showCloudflareSheet) {
+            CloudflareSheet {}.environmentObject(store)
         }
     }
 }
