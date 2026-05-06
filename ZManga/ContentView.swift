@@ -18,27 +18,19 @@ struct ContentView: View {
         ZStack {
             TabView(selection: $selectedTab) {
                 HomeView()
-                    .tabItem {
-                        Label("Home", systemImage: "house")
-                    }
+                    .tabItem { Label("Home", systemImage: "house") }
                     .tag(0)
 
                 SearchView()
-                    .tabItem {
-                        Label("Search", systemImage: "magnifyingglass")
-                    }
+                    .tabItem { Label("Search", systemImage: "magnifyingglass") }
                     .tag(1)
 
                 LibraryView()
-                    .tabItem {
-                        Label("Library", systemImage: "books.vertical")
-                    }
+                    .tabItem { Label("Library", systemImage: "books.vertical") }
                     .tag(2)
 
                 HistoryView()
-                    .tabItem {
-                        Label("History", systemImage: "clock")
-                    }
+                    .tabItem { Label("History", systemImage: "clock") }
                     .tag(3)
             }
             .accentColor(ZTheme.accent)
