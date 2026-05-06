@@ -7,6 +7,7 @@ struct ReaderView: View {
     let manga: Manga
     let chapter: Chapter
     let allChapters: [Chapter]
+    var initialPage: Int = 0
 
     @State private var isLoading = true
     @State private var currentPage = 0
@@ -19,10 +20,11 @@ struct ReaderView: View {
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
 
-    init(manga: Manga, chapter: Chapter, allChapters: [Chapter]) {
+    init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0) {
         self.manga = manga
         self.chapter = chapter
         self.allChapters = allChapters
+        self.initialPage = initialPage
         _currentChapterSlug = State(initialValue: chapter.slug)
     }
 
@@ -44,43 +46,37 @@ struct ReaderView: View {
             } else if allPages.isEmpty && !isLoading {
                 emptyPagesView
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
-                            if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
-                                ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
-                            }
-                            MangaPageImage(url: page.url)
-                                .onAppear {
-                                    currentPage = idx
-                                    saveProgress(pageIndex: idx)
-                                    if idx >= allPages.count - 5 && !loadingNextChapter {
-                                        Task { await loadNextChapter() }
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
+                                if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
+                                    ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
+                                        .id("sep_\(idx)")
+                                }
+                                MangaPageImage(url: page.url)
+                                    .id(idx)
+                                    .onAppear {
+                                        currentPage = idx
+                                        saveProgress(pageIndex: idx)
+                                        if idx >= allPages.count - 5 && !loadingNextChapter {
+                                            Task { await loadNextChapter() }
+                                        }
                                     }
-                                }
-                        }
-                        if loadingNextChapter {
-                            HStack {
-                                Spacer()
-                                VStack(spacing: 8) {
-                                    ProgressView().tint(ZTheme.accent)
-                                    Text("Loading next chapter...")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                                Spacer()
                             }
-                            .padding(40)
                         }
                     }
-                }
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
-                    if showUI { resetUITimer() }
+                    .onAppear {
+                        proxy.scrollTo(initialPage, anchor: .top)
+                    }
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
+                        if showUI { resetUITimer() }
+                    }
                 }
             }
 
-            // زر الإغلاق دائم
+            // زر الإغلاق
             VStack {
                 HStack {
                     Button { dismiss() } label: {
@@ -195,7 +191,7 @@ struct ReaderView: View {
                 isLoading = false
             }
         } catch ZMangaError.cloudflareChallenge {
-            await MainActor.run { errorMessage = "Cloudflare verification required. Go back and complete the verification."; isLoading = false }
+            await MainActor.run { errorMessage = "Cloudflare verification required."; isLoading = false }
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
         }
@@ -211,9 +207,7 @@ struct ReaderView: View {
 
         await MainActor.run { loadingNextChapter = true }
         do {
-            let urls = try await MangaService.shared.fetchChapterPages(
-                mangaSlug: manga.slug, chapterSlug: nextChapter.slug
-            )
+            let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug)
             await MainActor.run {
                 let startIndex = allPages.count
                 allPages.append(contentsOf: urls.map { (chapterSlug: nextChapter.slug, url: $0) })
@@ -253,7 +247,6 @@ struct ReaderView: View {
 // MARK: - Manga Page Image
 struct MangaPageImage: View {
     let url: String
-
     var body: some View {
         CachedAsyncImage(url: URL(string: url))
             .scaledToFit()
@@ -265,7 +258,6 @@ struct MangaPageImage: View {
 // MARK: - Chapter Separator
 struct ChapterSeparator: View {
     let number: String
-
     var body: some View {
         HStack(spacing: 12) {
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
@@ -275,9 +267,7 @@ struct ChapterSeparator: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(ZTheme.accent.opacity(0.1))
-                .overlay(
-                    Capsule().stroke(ZTheme.accent.opacity(0.3), lineWidth: 1)
-                )
+                .overlay(Capsule().stroke(ZTheme.accent.opacity(0.3), lineWidth: 1))
                 .clipShape(Capsule())
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
         }
