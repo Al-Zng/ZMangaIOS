@@ -7,167 +7,63 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    // MARK: - جلب HTML الأساسي (مع كشف Cloudflare)
+    private var webView: WKWebView?
+
+    private func getWebView() -> WKWebView {
+        if let wv = webView { return wv }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        self.webView = wv
+        return wv
+    }
+
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else {
             Logger.shared.log("Bad URL: \(urlString)", category: "MangaService")
             throw URLError(.badURL)
         }
         Logger.shared.log("Fetching HTML: \(urlString)", category: "MangaService")
+        let webView = getWebView()
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        webView.load(request)
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let config = WKWebViewConfiguration()
-            config.websiteDataStore = WKWebsiteDataStore.default()
-            let webView = WKWebView(frame: .zero, configuration: config)
-            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-
-            // يحتفظ المندوب بمرجع قوي لـ webView
-            let nav = NavigationHandler(continuation: continuation, webView: webView)
-            webView.navigationDelegate = nav
-            // منع تحرير nav
-            objc_setAssociatedObject(webView, "navHandler", nav, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            webView.load(request)
-        }
-    }
-
-    // MARK: - وكيل الملاحة (يحتفظ بـ webView قوي)
-    private class NavigationHandler: NSObject, WKNavigationDelegate {
-        let continuation: CheckedContinuation<String, Error>
-        var webView: WKWebView?
-
-        init(continuation: CheckedContinuation<String, Error>, webView: WKWebView) {
-            self.continuation = continuation
-            self.webView = webView
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var observer: NSKeyValueObservation?
+            observer = webView.observe(\.isLoading, options: [.new]) { _, change in
+                if change.newValue == false {
+                    observer?.invalidate()
+                    continuation.resume()
+                }
+            }
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
-                guard let self = self else { return }
+        let html: String = try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
-                    self.handleHTML(html, from: webView)
+                    continuation.resume(returning: html)
                 } else {
-                    self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                }
-                // إطلاق سراح webView
-                self.webView = nil
-            }
-        }
-
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            continuation.resume(throwing: error)
-            self.webView = nil
-        }
-
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            continuation.resume(throwing: error)
-            self.webView = nil
-        }
-
-        private func handleHTML(_ html: String, from webView: WKWebView) {
-            let isCloudflare = html.contains("Just a moment") ||
-                               html.contains("cf-browser-verification") ||
-                               html.contains("Checking your browser") ||
-                               html.contains("Attention Required")
-
-            Logger.shared.log("HTML Length: \(html.count)", category: "MangaService")
-            Logger.shared.log("Cloudflare detected: \(isCloudflare)", category: "MangaService")
-
-            if isCloudflare {
-                if let url = webView.url {
-                    Logger.shared.log("Triggering Cloudflare sheet for URL: \(url.absoluteString)", category: "MangaService")
-                    DispatchQueue.main.async {
-                        AppStore.currentStore?.triggerCloudflare(url: url)
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                    self?.continuation.resume(throwing: ZMangaError.cloudflareChallenge)
-                }
-            } else {
-                continuation.resume(returning: html)
-            }
-        }
-    }
-
-    // MARK: - جلب صفحات الفصل (مع انتظار الصور البطيئة)
-    private func fetchChapterHTMLWithLazyImages(urlString: String) async throws -> String {
-        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-        Logger.shared.log("Fetching chapter with lazy loading: \(urlString)", category: "ChapterPages")
-
-        let html = try await fetchHTML(urlString: urlString)
-        guard firstCapture(pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#, in: html) != nil else {
-            return html
-        }
-
-        let waitJS = """
-        new Promise((resolve) => {
-            let attempts = 0;
-            const check = () => {
-                attempts++;
-                const imgs = document.querySelectorAll('.reading-content img');
-                const hasRealSrc = Array.from(imgs).some(img => {
-                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
-                    return src.startsWith('http') && !src.includes('data:image');
-                });
-                if (hasRealSrc || attempts >= 30) resolve(attempts);
-                else setTimeout(check, 300);
-            };
-            setTimeout(check, 800);
-        });
-        """
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let config = WKWebViewConfiguration()
-            config.websiteDataStore = WKWebsiteDataStore.default()
-            let webView = WKWebView(frame: .zero, configuration: config)
-            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-
-            let delegate = LazyDelegate(continuation: continuation, waitJS: waitJS, webView: webView)
-            webView.navigationDelegate = delegate
-            objc_setAssociatedObject(webView, "lazyDelegate", delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            webView.load(request)
-        }
-    }
-
-    private class LazyDelegate: NSObject, WKNavigationDelegate {
-        let continuation: CheckedContinuation<String, Error>
-        let waitJS: String
-        var webView: WKWebView?
-
-        init(continuation: CheckedContinuation<String, Error>, waitJS: String, webView: WKWebView) {
-            self.continuation = continuation
-            self.waitJS = waitJS
-            self.webView = webView
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            webView.evaluateJavaScript(waitJS) { [weak self] _, _ in
-                guard let self = self else { return }
-                webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                    if let html = result as? String {
-                        self.continuation.resume(returning: html)
-                    } else {
-                        self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                    }
-                    self.webView = nil
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
                 }
             }
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            continuation.resume(throwing: error)
-            self.webView = nil
+        Logger.shared.log("HTML Length: \(html.count)", category: "MangaService")
+
+        let isCloudflare = html.contains("Just a moment") ||
+                           html.contains("cf-browser-verification") ||
+                           html.contains("Checking your browser") ||
+                           html.contains("Attention Required")
+        Logger.shared.log("Cloudflare detected: \(isCloudflare)", category: "MangaService")
+        if isCloudflare {
+            Logger.shared.log("Triggering Cloudflare sheet for URL: \(url.absoluteString)", category: "MangaService")
+            AppStore.currentStore?.triggerCloudflare(url: url)
+            throw ZMangaError.cloudflareChallenge
         }
 
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            continuation.resume(throwing: error)
-            self.webView = nil
-        }
+        return html
     }
 
     // MARK: - Public API
@@ -208,16 +104,41 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        Logger.shared.log("Attempting lazy image loading for chapter...", category: "ChapterPages")
-        do {
-            let updatedHTML = try await fetchChapterHTMLWithLazyImages(urlString: url)
-            let pages = parseChapterPages(html: updatedHTML)
-            Logger.shared.log("Lazy loading parsed \(pages.count) pages", category: "ChapterPages")
-            return pages
-        } catch {
-            Logger.shared.log("Lazy loading failed: \(error.localizedDescription)", category: "ChapterPages")
-            return parseChapterPages(html: html)
+        let webView = getWebView()
+        let waitJS = """
+        new Promise((resolve) => {
+            let attempts = 0;
+            const check = () => {
+                attempts++;
+                const imgs = document.querySelectorAll('.reading-content img');
+                const hasRealSrc = Array.from(imgs).some(img => {
+                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
+                    return src.startsWith('http') && !src.includes('data:image');
+                });
+                if (hasRealSrc || attempts >= 30) resolve(attempts);
+                else setTimeout(check, 300);
+            };
+            setTimeout(check, 800);
+        });
+        """
+
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
         }
+
+        let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                if let html = result as? String {
+                    continuation.resume(returning: html)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        let pages = parseChapterPages(html: updatedHTML)
+        Logger.shared.log("Parsed \(pages.count) pages after lazy loading", category: "ChapterPages")
+        return pages
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -226,6 +147,7 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - AJAX Image Fetching
+
     private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
         guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
 
@@ -238,7 +160,9 @@ class MangaService: NSObject, ObservableObject {
 
         let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
         let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-        if !cookieHeader.isEmpty { request.setValue(cookieHeader, forHTTPHeaderField: "Cookie") }
+        if !cookieHeader.isEmpty {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
 
         let body = "action=manga_get_chapter_img_list&chapter_id=\(chapterId)"
         request.httpBody = body.data(using: .utf8)
@@ -260,6 +184,7 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - Parse Manga List
+
     private func parseMangaList(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let cardPattern = #"<div class="page-item-detail[^"]*manga[^"]*">(.*?)</div>\s*</div>\s*</div>"#
@@ -331,6 +256,7 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - Parse Manga Detail
+
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let summaryBlock = firstCapture(pattern: #"(<div class="summary_image[^"]*">.*?</div>)"#, in: html) ?? html
@@ -394,6 +320,7 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - Parse Chapter Pages
+
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let content = extractReadingContent(html: html)
@@ -442,22 +369,36 @@ class MangaService: NSObject, ObservableObject {
             let remainingRange = NSRange(location: currentIndex, length: nsRemaining.length - currentIndex)
             if let nextDiv = firstMatchOf(pattern: #"</?div"#, in: nsRemaining, range: remainingRange) {
                 let tag = nsRemaining.substring(with: nextDiv.range)
-                if tag.hasPrefix("</") { depth -= 1 } else { depth += 1 }
+                if tag.hasPrefix("</") {
+                    depth -= 1
+                } else {
+                    depth += 1
+                }
                 currentIndex = nextDiv.range.location + nextDiv.range.length
-            } else { break }
+            } else {
+                break
+            }
         }
 
-        if depth == 0 { return nsRemaining.substring(to: currentIndex - endTag.count) }
+        if depth == 0 {
+            return nsRemaining.substring(to: currentIndex - endTag.count)
+        }
+
         return remaining
     }
 
     // MARK: - مساعدات
+
     private func extractHTMLTags(named tagName: String, from html: String) -> [String] {
         let pattern = "<\(tagName)\\s[^>]*>"
         guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return [] }
+                                                   options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
+            return []
+        }
         let ns = html as NSString
-        return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) }
+        return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).map {
+            ns.substring(with: $0.range)
+        }
     }
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
