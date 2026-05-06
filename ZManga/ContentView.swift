@@ -6,7 +6,6 @@ struct ContentView: View {
     @State private var selectedTab = 0
 
     init() {
-        AppStore.currentStore = nil
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = UIColor(ZTheme.surface)
