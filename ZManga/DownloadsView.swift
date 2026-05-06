@@ -1,9 +1,17 @@
 import SwiftUI
 
+// MARK: - كائن مساعد للتنقل (يدعم Identifiable)
+struct DownloadedChapterSelection: Identifiable {
+    let id = UUID()
+    let manga: Manga
+    let chapter: Chapter
+    let pages: [String]
+}
+
 struct DownloadsView: View {
     @EnvironmentObject var store: AppStore
     @StateObject private var dm = DownloadManager.shared
-    @State private var selectedChapter: (manga: Manga, chapter: Chapter, pages: [String])? = nil
+    @State private var selectedItem: DownloadedChapterSelection? = nil
 
     var body: some View {
         NavigationView {
@@ -71,7 +79,7 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
-            .fullScreenCover(item: $selectedChapter) { item in
+            .fullScreenCover(item: $selectedItem) { item in
                 ReaderView(manga: item.manga, chapter: item.chapter,
                            allChapters: [item.chapter],
                            initialPage: 0, preloadedPages: item.pages)
@@ -84,7 +92,7 @@ struct DownloadsView: View {
         guard let pages = dm.getPages(mangaSlug: chapter.mangaSlug, chapterSlug: chapter.chapterSlug) else { return }
         let manga = Manga(slug: chapter.mangaSlug, title: chapter.mangaTitle, coverURL: chapter.mangaCover)
         let chap = Chapter(slug: chapter.chapterSlug, number: chapter.chapterNumber, pages: pages)
-        selectedChapter = (manga, chap, pages)
+        selectedItem = DownloadedChapterSelection(manga: manga, chapter: chap, pages: pages)
     }
 }
 
