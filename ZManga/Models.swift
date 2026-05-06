@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import WebKit
 
 // MARK: - Manga Model
 struct Manga: Identifiable, Codable, Hashable {
@@ -260,7 +259,7 @@ class AppStore: ObservableObject {
     }
 }
 
-// MARK: - Design Tokens (النسخة العربية الذهبية)
+// MARK: - Design Tokens
 struct ZTheme {
     static let bg       = Color(hex: "#0D0D0D")
     static let surface  = Color(hex: "#161616")
@@ -300,24 +299,20 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (مع Referer وإعادة المحاولة)
+// MARK: - Cached Async Image (نسخة مستقلة لا تشارك كوكيز WKWebView)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var isLoading = true
-    @State private var loadFailed = false
+    @State private var failed = false
     @State private var attempt = 0
 
-    private static let cache = URLCache(
-        memoryCapacity: 80 * 1024 * 1024,
-        diskCapacity: 400 * 1024 * 1024,
-        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-    )
+    private static let cache = URLCache(memoryCapacity: 80*1024*1024, diskCapacity: 400*1024*1024)
 
     var body: some View {
         Group {
-            if let image = image {
-                Image(uiImage: image)
+            if let img = image {
+                Image(uiImage: img)
                     .resizable()
                     .interpolation(.high)
                     .antialiased(true)
@@ -335,72 +330,42 @@ struct CachedAsyncImage: View {
                     )
             }
         }
-        .task(id: url?.absoluteString) { await loadImage() }
+        .id(url?.absoluteString ?? UUID().uuidString)
+        .task(id: url?.absoluteString) {
+            attempt = 0
+            failed = false
+            isLoading = true
+            await loadImage()
+        }
     }
 
     private func loadImage() async {
-        guard let url = url else { isLoading = false; loadFailed = true; return }
+        guard let url = url else { isLoading = false; failed = true; return }
         let urlStr = url.absoluteString.lowercased()
         if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") || urlStr.contains("/favicon") {
-            isLoading = false; loadFailed = true; return
+            isLoading = false; failed = true; return
         }
 
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
-        config.timeoutIntervalForRequest = 20
-        config.httpShouldSetCookies = true
-        config.httpCookieAcceptPolicy = .always
+        config.timeoutIntervalForRequest = 15
         let session = URLSession(configuration: config)
-
-        // جلب كوكيز Cloudflare من WKWebView وإضافتها للطلب
-        let wkCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
-            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-                continuation.resume(returning: cookies)
-            }
-        }
-
-        // دمج كوكيز WKWebView مع HTTPCookieStorage
-        for cookie in wkCookies {
-            HTTPCookieStorage.shared.setCookie(cookie)
-        }
-
-        // بناء cookie header شامل
-        let allCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
-        let wkFiltered = wkCookies.filter { wk in !allCookies.contains(where: { $0.name == wk.name }) }
-        let cookieHeader = (allCookies + wkFiltered)
-            .map { "\($0.name)=\($0.value)" }
-            .joined(separator: "; ")
-
-        // تحديد الـ Referer الصحيح بناءً على الـ URL
-        let referer = url.absoluteString.contains("lekstorm") ?
-            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
         for _ in 0..<3 {
             attempt += 1
-            var request = URLRequest(url: url)
-            request.setValue(referer, forHTTPHeaderField: "Referer")
-            request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
-            request.setValue(
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-                forHTTPHeaderField: "User-Agent"
-            )
-            if !cookieHeader.isEmpty {
-                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            }
+            var req = URLRequest(url: url)
+            req.setValue("https://lekmanga.site", forHTTPHeaderField: "Referer")
+            req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
             do {
-                let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse,
-                   httpResp.statusCode == 200,
-                   let img = UIImage(data: data),
-                   img.size.width > 0 {
+                let (data, resp) = try await session.data(for: req)
+                if let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                   let img = UIImage(data: data), img.size.width > 0 {
                     await MainActor.run { image = img; isLoading = false }
                     return
                 }
-            } catch {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
+            } catch { try? await Task.sleep(nanoseconds: 500_000_000) }
         }
-        await MainActor.run { loadFailed = true; isLoading = false }
+        await MainActor.run { failed = true; isLoading = false }
     }
 }
