@@ -82,8 +82,25 @@ class MangaService: NSObject, ObservableObject {
     }
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
-        let html = try await fetchHTML(urlString: "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/")
-        return parseChapterPages(html: html)
+        let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+        _ = try await fetchHTML(urlString: url)
+
+        // انتظار 7 ثواني حتى يتم تحميل الصور البطيئة
+        try await Task.sleep(nanoseconds: 7_000_000_000)
+
+        // استخراج HTML محدث بعد تحميل الصور
+        let webView = getWebView()
+        let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                if let html = result as? String {
+                    continuation.resume(returning: html)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        return parseChapterPages(html: updatedHTML)
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -184,29 +201,20 @@ class MangaService: NSObject, ObservableObject {
         }
 
         var chapters: [Chapter] = []
-        // استخراج الفصول من li.wp-manga-chapter
         let chapterBlockPattern = #"<li class="wp-manga-chapter[^"]*">(.*?)</li>"#
         if let blockRegex = try? NSRegularExpression(pattern: chapterBlockPattern, options: [.dotMatchesLineSeparators]) {
-            blockRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: (html as NSString).length)) { match, _, _ in
+            blockRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
-                let block = (html as NSString).substring(with: match.range(at: 1))
+                let block = ns.substring(with: match.range(at: 1))
                 if let fullUrl = firstCapture(pattern: #"href="(https?://[^/]+/manga/[^/]+/([^/"]+)/)""#, in: block) {
-                    var slugPart = ""
-                    var numberPart = ""
-                    if let url = URL(string: fullUrl) {
-                        let components = url.pathComponents
-                        slugPart = components.last ?? fullUrl
-                        numberPart = components.last ?? fullUrl
-                    }
-                    let numberFromText = firstCapture(pattern: #">(\d+)</a>"#, in: block)
-                    if let num = numberFromText { numberPart = num }
-                    if !slugPart.isEmpty && !chapters.contains(where: { $0.slug == slugPart }) {
+                    let slugPart = URL(string: fullUrl)?.lastPathComponent ?? fullUrl
+                    let numberPart = firstCapture(pattern: #">(\d+)</a>"#, in: block) ?? slugPart
+                    if !chapters.contains(where: { $0.slug == slugPart }) {
                         chapters.append(Chapter(slug: slugPart, number: numberPart))
                     }
                 }
             }
         }
-        // fallback
         if chapters.isEmpty {
             let chapLinkPattern = #"href="https?://[^/]+/manga/[^/]+/([\d]+(?:-[\d]+)?)/"[^>]*>\s*(?:<[^>]*>\s*)*(\d+)"#
             if let regex = try? NSRegularExpression(pattern: chapLinkPattern, options: [.caseInsensitive]) {
@@ -226,88 +234,96 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-// MARK: - Parse Chapter Pages (نسخة شاملة لجميع الهياكل)
+    // MARK: - Parse Chapter Pages (داخل reading-content، مع انتظار lazy loading)
 
-private func parseChapterPages(html: String) -> [String] {
-    var pages: [String] = []
-    let ns = html as NSString
+    private func parseChapterPages(html: String) -> [String] {
+        var pages: [String] = []
+        let ns = html as NSString
 
-    // الخطوة 1: استخراج كل روابط الصور من الصفحة (src و data-src)
-    var allImageURLs: [String] = []
-    let imgTagPattern = #"<img[^>]+(?:src|data-src)\s*=\s*"([^"]+)"[^>]*>"#
-    if let imgRegex = try? NSRegularExpression(pattern: imgTagPattern,
-                                               options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-        imgRegex.enumerateMatches(in: html,
-                                  range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-            guard let match = match, match.numberOfRanges >= 2 else { return }
-            let url = ns.substring(with: match.range(at: 1))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !allImageURLs.contains(url) {
-                allImageURLs.append(url)
+        // استخراج المحتوى داخل reading-content أولاً
+        var containerContent = ""
+        let containerPattern = #"<div[^>]+class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>\s*(?:<(?:div|script|style))"#
+        if let containerRegex = try? NSRegularExpression(pattern: containerPattern,
+                                                         options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            containerRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+                guard let match = match, match.numberOfRanges >= 2 else { return }
+                containerContent += ns.substring(with: match.range(at: 1))
             }
         }
-    }
 
-    // الخطوة 2: فلترة الروابط
-    for url in allImageURLs {
-        if isValidChapterImageURL(url) && !pages.contains(url) {
-            pages.append(url)
+        let target = containerContent.isEmpty ? html : containerContent
+        let targetNS = target as NSString
+
+        // استخراج كل الصور مع تفضيل data-src
+        let imgPattern = #"<img[^>]+(?:data-src|src)\s*=\s*"([^"]+)"[^>]*>"#
+        guard let imgRegex = try? NSRegularExpression(pattern: imgPattern,
+                                                      options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
+            return pages
         }
-    }
 
-    // الخطوة 3: نمط احتياطي أوسع
-    if pages.isEmpty {
-        let fallbackPattern = #"(?:src|data-src)\s*=\s*"([^"]+\.(?:jpg|jpeg|png|webp))""#
-        if let fbRegex = try? NSRegularExpression(pattern: fallbackPattern,
-                                                  options: [.caseInsensitive]) {
-            fbRegex.enumerateMatches(in: html,
-                                     range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-                guard let match = match, match.numberOfRanges >= 2 else { return }
-                let url = ns.substring(with: match.range(at: 1))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if isValidChapterImageURL(url) && !pages.contains(url) {
-                    pages.append(url)
+        var foundURLs = Set<String>()
+        imgRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
+            guard let match = match, match.numberOfRanges >= 2 else { return }
+            let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if isValidChapterImageURL(url) {
+                foundURLs.insert(url)
+            }
+        }
+
+        // ترتيب الظهور
+        imgRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
+            guard let match = match, match.numberOfRanges >= 2 else { return }
+            let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if foundURLs.contains(url) && !pages.contains(url) {
+                pages.append(url)
+            }
+        }
+
+        // إذا لم نجد، نجرب البحث داخل page-break
+        if pages.isEmpty {
+            let altPattern = #"<div[^>]+class="[^"]*page-break[^"]*"[^>]*>\s*<img[^>]+data-src="([^"]+)"[^>]*>"#
+            if let altRegex = try? NSRegularExpression(pattern: altPattern,
+                                                       options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+                altRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
+                    guard let match = match, match.numberOfRanges >= 2 else { return }
+                    let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if isValidChapterImageURL(url) && !pages.contains(url) {
+                        pages.append(url)
+                    }
                 }
             }
         }
+
+        return pages
     }
 
-    return pages
-}
-
-// دالة مساعدة للتحقق من صلاحية رابط صورة الفصل
-private func isValidChapterImageURL(_ url: String) -> Bool {
-    guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
-    let lower = url.lowercased()
-
-    // استبعاد الشعارات والأيقونات
-    if lower.contains("lekmanga.png") ||
-       lower.contains("-512.png") ||
-       lower.contains("-192x192.png") ||
-       lower.contains("-32x32.png") ||
-       lower.contains("-150x150.png") ||
-       lower.contains("/favicon") ||
-       lower.contains("logo") ||
-       lower.contains("/icon-") {
-        return false
+    private func isValidChapterImageURL(_ url: String) -> Bool {
+        guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
+        let lower = url.lowercased()
+        if lower.contains("lekmanga.png") ||
+           lower.contains("-512.png") ||
+           lower.contains("-192x192.png") ||
+           lower.contains("-32x32.png") ||
+           lower.contains("-150x150.png") ||
+           lower.contains("/favicon") ||
+           lower.contains("logo") ||
+           lower.contains("/icon-") ||
+           lower.contains("-1x1") ||
+           lower.contains("blank") ||
+           lower.contains("placeholder") {
+            return false
+        }
+        let validExtensions = [".jpg", ".jpeg", ".png", ".webp"]
+        return validExtensions.contains(where: { lower.hasSuffix($0) || lower.contains($0 + "?") })
     }
-
-    // استبعاد الصور الوهمية
-    if lower.contains("-1x1") || lower.contains("blank") || lower.contains("placeholder") {
-        return false
-    }
-
-    // يجب أن ينتهي بامتداد صورة معروف
-    let validExtensions = [".jpg", ".jpeg", ".png", ".webp"]
-    return validExtensions.contains(where: { lower.hasSuffix($0) || lower.contains($0 + "?") })
-}
 
     // MARK: - Helpers
 
     private func firstCapture(pattern: String, in text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         let ns = text as NSString
-        guard let m = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)), m.numberOfRanges >= 2 else { return nil }
+        guard let m = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
+              m.numberOfRanges >= 2 else { return nil }
         let r = m.range(at: 1)
         guard r.location != NSNotFound else { return nil }
         return ns.substring(with: r)
