@@ -15,7 +15,6 @@ struct Manga: Identifiable, Codable, Hashable {
     var chapters: [Chapter]
     var author: String
     var artist: String
-
     var latestChapterNumber: String?
     var lastUpdated: String?
 
@@ -92,12 +91,13 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager
+// MARK: - Download Manager (محسّن)
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
     @Published var activeDownloads: [String: Double] = [:]
     private let downloadsKey = "zmanga_downloads"
+
     init() { load() }
 
     struct DownloadedChapter: Codable, Identifiable {
@@ -106,31 +106,54 @@ class DownloadManager: ObservableObject {
         let chapterSlug: String
         let chapterNumber: String
         let mangaTitle: String
+        let mangaCover: String      // غلاف المانجا
         let pages: [String]
         let downloadedAt: Date
+    }
+
+    // الحجم الإجمالي للملفات المحمّلة
+    var downloadedSize: Int64 {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let downloadsDir = base.appendingPathComponent("downloads")
+        return folderSize(at: downloadsDir)
     }
 
     func isDownloaded(mangaSlug: String, chapterSlug: String) -> Bool {
         downloads["\(mangaSlug)_\(chapterSlug)"] != nil
     }
+
     func isDownloading(mangaSlug: String, chapterSlug: String) -> Bool {
         activeDownloads["\(mangaSlug)_\(chapterSlug)"] != nil
     }
+
     func progress(mangaSlug: String, chapterSlug: String) -> Double {
         activeDownloads["\(mangaSlug)_\(chapterSlug)"] ?? 0
     }
 
     @MainActor
-    func downloadChapter(manga: Manga, chapter: Chapter, pages: [String]) async {
+    func downloadChapter(manga: Manga, chapter: Chapter, pages: [String]? = nil) async {
         let key = "\(manga.slug)_\(chapter.slug)"
         guard !isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
               !isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) else { return }
+
         activeDownloads[key] = 0.0
         let dir = getChapterDir(mangaSlug: manga.slug, chapterSlug: chapter.slug)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let urls: [String]
+        if let pages = pages {
+            urls = pages
+        } else {
+            guard let fetched = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else {
+                activeDownloads.removeValue(forKey: key)
+                return
+            }
+            urls = fetched
+        }
+
         var localPaths: [String] = []
         let session = URLSession.shared
-        for (idx, urlStr) in pages.enumerated() {
+        for (idx, urlStr) in urls.enumerated() {
             guard let url = URL(string: urlStr) else { continue }
             do {
                 let (data, _) = try await session.data(from: url)
@@ -138,14 +161,19 @@ class DownloadManager: ObservableObject {
                 try data.write(to: filePath)
                 localPaths.append(filePath.path)
             } catch {
-                localPaths.append(urlStr)
+                localPaths.append(urlStr) // fallback
             }
-            activeDownloads[key] = Double(idx + 1) / Double(pages.count)
+            activeDownloads[key] = Double(idx + 1) / Double(urls.count)
         }
+
         let downloaded = DownloadedChapter(
-            mangaSlug: manga.slug, chapterSlug: chapter.slug,
-            chapterNumber: chapter.number, mangaTitle: manga.title,
-            pages: localPaths, downloadedAt: Date()
+            mangaSlug: manga.slug,
+            chapterSlug: chapter.slug,
+            chapterNumber: chapter.number,
+            mangaTitle: manga.title,
+            mangaCover: manga.coverURL,
+            pages: localPaths,
+            downloadedAt: Date()
         )
         downloads[key] = downloaded
         activeDownloads.removeValue(forKey: key)
@@ -177,6 +205,17 @@ class DownloadManager: ObservableObject {
         return base.appendingPathComponent("downloads/\(mangaSlug)/\(chapterSlug)")
     }
 
+    private func folderSize(at url: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var size: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            if let fileSize = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                size += Int64(fileSize)
+            }
+        }
+        return size
+    }
+
     private func save() {
         if let data = try? JSONEncoder().encode(downloads) {
             UserDefaults.standard.set(data, forKey: downloadsKey)
@@ -190,21 +229,20 @@ class DownloadManager: ObservableObject {
     }
 }
 
-// MARK: - AppStore
+// MARK: - AppStore (مع كاش تفاصيل المانجا)
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
-    @Published var library: [Manga] = []                   // Favorites
+    @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
     @Published var completed: [Manga] = []
     @Published var showCloudflareSheet = false
-    @Published var cloudflareURL: URL? = nil
+    @Published var cloudflareURL: URL?
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
-
-    // Cached home data
     @Published var cachedLatest: [Manga]?
     @Published var cachedPopular: [Manga]?
+    @Published var mangaCache: [String: Manga] = [:]  // كاش التفاصيل للسرعة
 
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
@@ -212,6 +250,7 @@ class AppStore: ObservableObject {
     private let completedKey = "zmanga_completed"
     private let cachedLatestKey = "zmanga_cached_latest"
     private let cachedPopularKey = "zmanga_cached_popular"
+    private let mangaCacheKey = "zmanga_manga_cache"
 
     init() {
         loadHistory()
@@ -219,6 +258,7 @@ class AppStore: ObservableObject {
         loadWantToRead()
         loadCompleted()
         loadCached()
+        loadMangaCache()
     }
 
     // MARK: - History
@@ -228,128 +268,57 @@ class AppStore: ObservableObject {
         if history.count > 200 { history = Array(history.prefix(200)) }
         persistHistory()
     }
-    func clearHistory() {
-        history.removeAll()
-        persistHistory()
-    }
-    private func persistHistory() {
-        if let data = try? JSONEncoder().encode(history) {
-            UserDefaults.standard.set(data, forKey: historyKey)
-        }
-    }
-    private func loadHistory() {
-        guard let data = UserDefaults.standard.data(forKey: historyKey),
-              let decoded = try? JSONDecoder().decode([ReadingProgress].self, from: data) else { return }
-        history = decoded
-    }
+    func clearHistory() { history.removeAll(); persistHistory() }
+    private func persistHistory() { UserDefaults.standard.set(try? JSONEncoder().encode(history), forKey: historyKey) }
+    private func loadHistory() { if let data = UserDefaults.standard.data(forKey: historyKey), let d = try? JSONDecoder().decode([ReadingProgress].self, from: data) { history = d } }
 
-    // MARK: - Favorites (Library)
-    func addToLibrary(_ manga: Manga) {
-        guard !library.contains(where: { $0.slug == manga.slug }) else { return }
-        library.insert(manga, at: 0)
-        persistLibrary()
-    }
-    func removeFromLibrary(_ manga: Manga) {
-        library.removeAll { $0.slug == manga.slug }
-        persistLibrary()
-    }
-    func isInLibrary(_ manga: Manga) -> Bool {
-        library.contains { $0.slug == manga.slug }
-    }
-    private func persistLibrary() {
-        if let data = try? JSONEncoder().encode(library) {
-            UserDefaults.standard.set(data, forKey: libraryKey)
-        }
-    }
-    private func loadLibrary() {
-        guard let data = UserDefaults.standard.data(forKey: libraryKey),
-              let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
-        library = decoded
-    }
+    // MARK: - Favorites
+    func addToLibrary(_ manga: Manga) { guard !library.contains(where: { $0.slug == manga.slug }) else { return }; library.insert(manga, at: 0); persistLibrary() }
+    func removeFromLibrary(_ manga: Manga) { library.removeAll { $0.slug == manga.slug }; persistLibrary() }
+    func isInLibrary(_ manga: Manga) -> Bool { library.contains { $0.slug == manga.slug } }
+    private func persistLibrary() { UserDefaults.standard.set(try? JSONEncoder().encode(library), forKey: libraryKey) }
+    private func loadLibrary() { if let data = UserDefaults.standard.data(forKey: libraryKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { library = d } }
 
     // MARK: - Want to Read
-    func addWantToRead(_ manga: Manga) {
-        guard !wantToRead.contains(where: { $0.slug == manga.slug }) else { return }
-        wantToRead.insert(manga, at: 0)
-        persistWantToRead()
-    }
-    func removeWantToRead(_ manga: Manga) {
-        wantToRead.removeAll { $0.slug == manga.slug }
-        persistWantToRead()
-    }
-    func isWantToRead(_ manga: Manga) -> Bool {
-        wantToRead.contains { $0.slug == manga.slug }
-    }
-    private func persistWantToRead() {
-        if let data = try? JSONEncoder().encode(wantToRead) {
-            UserDefaults.standard.set(data, forKey: wantToReadKey)
-        }
-    }
-    private func loadWantToRead() {
-        guard let data = UserDefaults.standard.data(forKey: wantToReadKey),
-              let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
-        wantToRead = decoded
-    }
+    func addWantToRead(_ manga: Manga) { guard !wantToRead.contains(where: { $0.slug == manga.slug }) else { return }; wantToRead.insert(manga, at: 0); persistWantToRead() }
+    func removeWantToRead(_ manga: Manga) { wantToRead.removeAll { $0.slug == manga.slug }; persistWantToRead() }
+    func isWantToRead(_ manga: Manga) -> Bool { wantToRead.contains { $0.slug == manga.slug } }
+    private func persistWantToRead() { UserDefaults.standard.set(try? JSONEncoder().encode(wantToRead), forKey: wantToReadKey) }
+    private func loadWantToRead() { if let data = UserDefaults.standard.data(forKey: wantToReadKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { wantToRead = d } }
 
     // MARK: - Completed
-    func addCompleted(_ manga: Manga) {
-        guard !completed.contains(where: { $0.slug == manga.slug }) else { return }
-        completed.insert(manga, at: 0)
-        persistCompleted()
-    }
-    func removeCompleted(_ manga: Manga) {
-        completed.removeAll { $0.slug == manga.slug }
-        persistCompleted()
-    }
-    func isCompleted(_ manga: Manga) -> Bool {
-        completed.contains { $0.slug == manga.slug }
-    }
-    private func persistCompleted() {
-        if let data = try? JSONEncoder().encode(completed) {
-            UserDefaults.standard.set(data, forKey: completedKey)
-        }
-    }
-    private func loadCompleted() {
-        guard let data = UserDefaults.standard.data(forKey: completedKey),
-              let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
-        completed = decoded
+    func addCompleted(_ manga: Manga) { guard !completed.contains(where: { $0.slug == manga.slug }) else { return }; completed.insert(manga, at: 0); persistCompleted() }
+    func removeCompleted(_ manga: Manga) { completed.removeAll { $0.slug == manga.slug }; persistCompleted() }
+    func isCompleted(_ manga: Manga) -> Bool { completed.contains { $0.slug == manga.slug } }
+    private func persistCompleted() { UserDefaults.standard.set(try? JSONEncoder().encode(completed), forKey: completedKey) }
+    private func loadCompleted() { if let data = UserDefaults.standard.data(forKey: completedKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { completed = d } }
+
+    // MARK: - Home Caching
+    func saveCachedLatest(_ items: [Manga]) { cachedLatest = items; UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: cachedLatestKey) }
+    func saveCachedPopular(_ items: [Manga]) { cachedPopular = items; UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: cachedPopularKey) }
+    private func loadCached() {
+        if let data = UserDefaults.standard.data(forKey: cachedLatestKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { cachedLatest = d }
+        if let data = UserDefaults.standard.data(forKey: cachedPopularKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { cachedPopular = d }
     }
 
-    // MARK: - Cached Home Data
-    func saveCachedLatest(_ items: [Manga]) {
-        cachedLatest = items
-        if let data = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(data, forKey: cachedLatestKey)
-        }
+    // MARK: - Manga Detail Cache
+    func cacheManga(_ manga: Manga) {
+        mangaCache[manga.slug] = manga
+        persistMangaCache()
     }
-    func saveCachedPopular(_ items: [Manga]) {
-        cachedPopular = items
-        if let data = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(data, forKey: cachedPopularKey)
-        }
+    private func persistMangaCache() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey)
     }
-    private func loadCached() {
-        if let data = UserDefaults.standard.data(forKey: cachedLatestKey),
-           let decoded = try? JSONDecoder().decode([Manga].self, from: data) {
-            cachedLatest = decoded
-        }
-        if let data = UserDefaults.standard.data(forKey: cachedPopularKey),
-           let decoded = try? JSONDecoder().decode([Manga].self, from: data) {
-            cachedPopular = decoded
-        }
+    private func loadMangaCache() {
+        if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d }
     }
 
     // MARK: - Cloudflare
-    func triggerCloudflare(url: URL) {
-        cloudflareURL = url
-        showCloudflareSheet = true
-    }
-    func triggerReload() {
-        reloadTrigger += 1
-    }
+    func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
+    func triggerReload() { reloadTrigger += 1 }
 }
 
-// MARK: - Design Tokens (النسخة العربية الذهبية)
+// MARK: - Design Tokens
 struct ZTheme {
     static let bg       = Color(hex: "#0D0D0D")
     static let surface  = Color(hex: "#161616")
@@ -375,33 +344,28 @@ struct ZTheme {
 
 extension Color {
     init(hex: String) {
-        let h = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        let h = hex.trimmingCharacters(in: .alphanumerics.inverted)
         var int: UInt64 = 0
         Scanner(string: h).scanHexInt64(&int)
         let a, r, g, b: UInt64
         switch h.count {
-        case 3:  (a, r, g, b) = (255, (int >> 8)*17, (int >> 4 & 0xF)*17, (int & 0xF)*17)
-        case 6:  (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:  (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        case 3:  (a, r, g, b) = (255, (int>>8)*17, (int>>4 & 0xF)*17, (int & 0xF)*17)
+        case 6:  (a, r, g, b) = (255, int>>16, int>>8 & 0xFF, int & 0xFF)
+        case 8:  (a, r, g, b) = (int>>24, int>>16 & 0xFF, int>>8 & 0xFF, int & 0xFF)
         default: (a, r, g, b) = (255,0,0,0)
         }
         self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
     }
 }
 
-// MARK: - Cached Async Image (مع Referer وإعادة المحاولة) - إعادة تعيين الحالة
+// MARK: - Cached Async Image (بدون تغيير)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var loadFailed = false
     @State private var attempt = 0
-
-    private static let cache = URLCache(
-        memoryCapacity: 80 * 1024 * 1024,
-        diskCapacity: 400 * 1024 * 1024,
-        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-    )
+    private static let cache = URLCache(memoryCapacity: 80_000_000, diskCapacity: 400_000_000, directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
 
     var body: some View {
         Group {
@@ -411,21 +375,12 @@ struct CachedAsyncImage: View {
                     .interpolation(.high)
                     .antialiased(true)
             } else if isLoading && attempt < 3 {
-                Rectangle()
-                    .fill(Color(white: 0.12))
-                    .overlay(ProgressView().tint(ZTheme.accent))
+                Rectangle().fill(Color(white: 0.12)).overlay(ProgressView().tint(ZTheme.accent))
             } else {
-                Rectangle()
-                    .fill(Color(white: 0.12))
-                    .overlay(
-                        Image(systemName: "photo")
-                            .font(.title2)
-                            .foregroundColor(ZTheme.textTertiary)
-                    )
+                Rectangle().fill(Color(white: 0.12)).overlay(Image(systemName: "photo").font(.title2).foregroundColor(ZTheme.textTertiary))
             }
         }
         .task(id: url?.absoluteString) {
-            // إعادة تعيين الحالة عند تغيّر الرابط
             await MainActor.run {
                 image = nil
                 isLoading = true
@@ -442,7 +397,6 @@ struct CachedAsyncImage: View {
         if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") || urlStr.contains("/favicon") {
             isLoading = false; loadFailed = true; return
         }
-
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
@@ -451,49 +405,29 @@ struct CachedAsyncImage: View {
         config.httpCookieAcceptPolicy = .always
         let session = URLSession(configuration: config)
 
-        let wkCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
-            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-                continuation.resume(returning: cookies)
-            }
+        let wkCookies: [HTTPCookie] = await withCheckedContinuation { c in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { c.resume(returning: $0) }
         }
-
-        for cookie in wkCookies {
-            HTTPCookieStorage.shared.setCookie(cookie)
-        }
-
+        for cookie in wkCookies { HTTPCookieStorage.shared.setCookie(cookie) }
         let allCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
         let wkFiltered = wkCookies.filter { wk in !allCookies.contains(where: { $0.name == wk.name }) }
-        let cookieHeader = (allCookies + wkFiltered)
-            .map { "\($0.name)=\($0.value)" }
-            .joined(separator: "; ")
-
-        let referer = url.absoluteString.contains("lekstorm") ?
-            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
+        let cookieHeader = (allCookies + wkFiltered).map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        let referer = url.absoluteString.contains("lekstorm") ? "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
         for _ in 0..<3 {
             attempt += 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
-            request.setValue(
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-                forHTTPHeaderField: "User-Agent"
-            )
-            if !cookieHeader.isEmpty {
-                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            }
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+            if !cookieHeader.isEmpty { request.setValue(cookieHeader, forHTTPHeaderField: "Cookie") }
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse,
-                   httpResp.statusCode == 200,
-                   let img = UIImage(data: data),
-                   img.size.width > 0 {
+                if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
                     await MainActor.run { image = img; isLoading = false }
                     return
                 }
-            } catch {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
+            } catch { try? await Task.sleep(nanoseconds: 500_000_000) }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
     }
