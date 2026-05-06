@@ -54,6 +54,9 @@ class MangaService: NSObject, ObservableObject {
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             guard !finished else { return }
+            // -999 = NSURLErrorCancelled يحدث عند stopLoading، نتجاهله ونكمل
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
             finished = true
             webView.navigationDelegate = nil
             continuation.resume(throwing: error)
@@ -61,6 +64,8 @@ class MangaService: NSObject, ObservableObject {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard !finished else { return }
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
             finished = true
             webView.navigationDelegate = nil
             continuation.resume(throwing: error)
@@ -70,12 +75,15 @@ class MangaService: NSObject, ObservableObject {
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         let webView = getWebView()
+
+        // أوقف التحميل السابق قبل تعيين الـ delegate الجديد
+        // لو عكسنا الترتيب، الـ stopLoading يرسل didFail(-999) للـ delegate الجديد فوراً
+        webView.navigationDelegate = nil
         webView.stopLoading()
 
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
             let delegate = FetchNavDelegate(continuation: continuation, url: url)
             webView.navigationDelegate = delegate
-            // نحتفظ بـ delegate في الـ webView حتى ما يُحذف قبل اكتمال التحميل
             objc_setAssociatedObject(webView, "fetchDelegate", delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
             var request = URLRequest(url: url)
