@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var logger: Logger
     @AppStorage("autoLoadNextChapter") var autoLoadNextChapter = true
 
     var body: some View {
@@ -40,6 +41,17 @@ struct SettingsView: View {
                         .foregroundColor(ZTheme.danger)
                     }
 
+                    Section("Debug Log") {
+                        NavigationLink("View Logs") {
+                            DebugLogView()
+                                .environmentObject(logger)
+                        }
+                        Button("Clear Logs") {
+                            logger.clear()
+                        }
+                        .foregroundColor(ZTheme.danger)
+                    }
+
                     Section("About") {
                         HStack {
                             Text("Version")
@@ -62,5 +74,36 @@ struct SettingsView: View {
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+}
+
+struct DebugLogView: View {
+    @EnvironmentObject var logger: Logger
+
+    var body: some View {
+        List {
+            ForEach(logger.entries.sorted(by: { $0.timestamp > $1.timestamp })) { entry in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.category)
+                        .font(.caption)
+                        .foregroundColor(ZTheme.accent)
+                    Text(entry.message)
+                        .font(.system(size: 12))
+                        .foregroundColor(ZTheme.textPrimary)
+                    Text(entry.timestamp.formatted(date: .numeric, time: .standard))
+                        .font(.caption2)
+                        .foregroundColor(ZTheme.textTertiary)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .navigationTitle("Logs")
+        .background(ZTheme.bg)
+        .scrollContentBackground(.hidden)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Clear") { logger.clear() }
+            }
+        }
     }
 }
