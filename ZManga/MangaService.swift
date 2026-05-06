@@ -1,4 +1,4 @@
-import Foundation
+  Foundation
 import WebKit
 
 // MARK: - MangaService
@@ -73,7 +73,7 @@ class MangaService: NSObject, ObservableObject {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let html = try await fetchHTML(urlString: "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)")
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty }
+            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
     }
 
     func fetchDetail(slug: String) async throws -> Manga {
@@ -83,9 +83,11 @@ class MangaService: NSObject, ObservableObject {
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+
+        // 1. تحميل الصفحة أولاً للحصول على chapter_id
         let html = try await fetchHTML(urlString: url)
 
-        // 1. محاولة AJAX أولاً (سريعة)
+        // 2. محاولة AJAX أولاً (الأسرع والأموثق)
         if let chapterId = firstCapture(
             pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
             in: html
@@ -95,12 +97,43 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // 2. إذا فشل AJAX، نُحلّل الـ HTML الحالي مباشرة (للفصول القديمة)
-        let directParse = parseChapterPages(html: html)
-        if !directParse.isEmpty { return directParse }
+        // 3. الـ WebView محمّل بالفعل — الآن ننتظر حتى يُحقن lazy loading الصور في DOM
+        let webView = getWebView()
+        let waitJS = """
+        new Promise((resolve) => {
+            let attempts = 0;
+            const check = () => {
+                attempts++;
+                const imgs = document.querySelectorAll('.reading-content img');
+                const hasRealSrc = Array.from(imgs).some(img => {
+                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
+                    return src.startsWith('http') && !src.includes('data:image');
+                });
+                if (hasRealSrc || attempts >= 30) resolve(attempts);
+                else setTimeout(check, 300);
+            };
+            // أعط الـ JS وقتاً ليبدأ
+            setTimeout(check, 800);
+        });
+        """
 
-        // 3. لا ننتظر أبداً – نُظهر خطأ ودّي
-        throw ZMangaError.networkError("Images could not be loaded")
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
+        }
+
+        // 4. الآن اجلب الـ HTML بعد أن عمل الـ lazy loading
+        let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                if let html = result as? String {
+                    continuation.resume(returning: html)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        let pages = parseChapterPages(html: updatedHTML)
+        return pages
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -108,7 +141,7 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - AJAX Image Fetching
+    // MARK: - AJAX Image Fetching (الإصلاح الرئيسي)
 
     private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
         guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
@@ -120,6 +153,7 @@ class MangaService: NSObject, ObservableObject {
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
 
+        // نسخ الكوكيز من WebView إلى الطلب
         let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
         let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
@@ -134,6 +168,7 @@ class MangaService: NSObject, ObservableObject {
             return []
         }
 
+        // محاولة تفسير الـ response كـ JSON (مصفوفة أو كائن ببيانات)
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
@@ -142,12 +177,15 @@ class MangaService: NSObject, ObservableObject {
             return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
 
+        // إذا كان الـ response عبارة عن HTML (حالة نادرة)
         if let html = String(data: data, encoding: .utf8), html.contains("<img") {
             return parseChapterPages(html: html)
         }
 
         return []
     }
+
+
 
     // MARK: - Parse Manga List
 
@@ -368,14 +406,17 @@ class MangaService: NSObject, ObservableObject {
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
         for tag in tags {
+            // data-lazy-src أولاً
             if let dataLazy = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataLazy.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
+            // data-src
             if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
+            // src
             if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") && !isLogoOnly(url) { return url }
