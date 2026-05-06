@@ -23,9 +23,7 @@ struct SearchView: View {
 
                 VStack(spacing: 0) {
                     searchBar
-
                     genrePills
-
                     Divider().background(ZTheme.border)
 
                     if isLoading && results.isEmpty {
@@ -64,7 +62,7 @@ struct SearchView: View {
                             return
                         }
                         searchTask = Task {
-                            try? await Task.sleep(nanoseconds: 400_000_000) // 0.4s debounce
+                            try? await Task.sleep(nanoseconds: 400_000_000)
                             if !Task.isCancelled { triggerSearch() }
                         }
                     }
@@ -115,13 +113,14 @@ struct SearchView: View {
     var resultsGrid: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 14) {
-                ForEach(results) { manga in
+                ForEach(Array(results.enumerated()), id: \.offset) { index, manga in
                     NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
                         SearchGridCard(manga: manga)
+                            .id("\(manga.slug)-\(index)")
                     }
                     .buttonStyle(PlainButtonStyle())
                     .onAppear {
-                        if manga.id == results.last?.id && !loadingMore && hasMore {
+                        if index == results.count - 1 && !loadingMore && hasMore {
                             loadMore()
                         }
                     }
@@ -229,7 +228,6 @@ struct SearchView: View {
 
 struct SearchGridCard: View {
     let manga: Manga
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
@@ -237,7 +235,6 @@ struct SearchGridCard: View {
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-
             Text(manga.title)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(ZTheme.textPrimary)
@@ -250,7 +247,6 @@ struct GenrePill: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
-
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -260,9 +256,7 @@ struct GenrePill: View {
                 .padding(.vertical, 6)
                 .background(isSelected ? ZTheme.accent : ZTheme.card)
                 .clipShape(Capsule())
-                .overlay(
-                    Capsule().stroke(isSelected ? Color.clear : ZTheme.border, lineWidth: 1)
-                )
+                .overlay(Capsule().stroke(isSelected ? Color.clear : ZTheme.border, lineWidth: 1))
         }
     }
 }
