@@ -83,11 +83,21 @@ class MangaService: NSObject, ObservableObject {
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
-        _ = try await fetchHTML(urlString: url)
+        let html = try await fetchHTML(urlString: url)
 
-        // انتظار ذكي حتى تظهر الصور الحقيقية في الـ DOM
+        // 1. استخراج chapter_id من الـ hidden input
+        if let chapterId = firstCapture(
+            pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
+            in: html
+        ) {
+            // جلب الصور مباشرة عبر AJAX
+            if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
+                return pages
+            }
+        }
+
+        // 2. إذا فشل، انتظر WebView ثم parse
         try await waitForImages()
-
         let webView = getWebView()
         let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
@@ -98,7 +108,6 @@ class MangaService: NSObject, ObservableObject {
                 }
             }
         }
-
         return parseChapterPages(html: updatedHTML)
     }
 
@@ -107,22 +116,69 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - Smart Wait for Lazy Images
+    // MARK: - AJAX Image Fetching (الإصلاح الرئيسي)
+
+    private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
+        guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
+
+        var request = URLRequest(url: ajaxURL)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(baseURL, forHTTPHeaderField: "Referer")
+        request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+
+        // نسخ الكوكيز من WebView إلى الطلب
+        let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
+        let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        if !cookieHeader.isEmpty {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
+
+        let body = "action=manga_get_chapter_img_list&chapter_id=\(chapterId)"
+        request.httpBody = body.data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return []
+        }
+
+        // محاولة تفسير الـ response كـ JSON (مصفوفة أو كائن ببيانات)
+        if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
+        }
+        if let jsonDict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let images = jsonDict["data"] as? [[String: Any]] {
+            return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
+        }
+
+        // إذا كان الـ response عبارة عن HTML (حالة نادرة)
+        if let html = String(data: data, encoding: .utf8), html.contains("<img") {
+            return parseChapterPages(html: html)
+        }
+
+        return []
+    }
+
+    // MARK: - Smart Wait for Lazy Images (مُصلح: لا ينتهي إذا لم توجد صور بعد)
 
     private func waitForImages() async throws {
         let waitJS = """
         new Promise((resolve) => {
+            let attempts = 0;
             const check = () => {
+                attempts++;
                 const imgs = document.querySelectorAll('.reading-content img');
                 const hasRealSrc = Array.from(imgs).some(img => {
-                    const src = img.dataset.src || img.dataset.lazySrc || img.src || '';
+                    const src = img.dataset.lazySrc || img.dataset.src || img.src || '';
                     return src.startsWith('http') && !src.includes('data:image');
                 });
-                if (hasRealSrc || imgs.length === 0) resolve();
-                else setTimeout(check, 200);
+                // نحتاج صور حقيقية؛ لا نحلّ إذا كانت الصور فارغة
+                if (hasRealSrc) resolve();
+                else if (attempts < 20) setTimeout(check, 300);
+                else resolve(); // timeout بعد 6 ثواني
             };
-            setTimeout(check, 300);
-            setTimeout(resolve, 4000); // timeout أقصى
+            setTimeout(check, 500);
         });
         """
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -200,7 +256,7 @@ class MangaService: NSObject, ObservableObject {
                 time?.trimmingCharacters(in: .whitespaces))
     }
 
-    // MARK: - Parse Manga Detail (باستخدام pathComponents)
+    // MARK: - Parse Manga Detail
 
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
@@ -268,7 +324,6 @@ class MangaService: NSObject, ObservableObject {
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
-
         let content = extractReadingContent(html: html)
 
         let patterns: [(String, NSRegularExpression.Options)] = [
