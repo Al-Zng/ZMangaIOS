@@ -20,6 +20,9 @@ struct ReaderView: View {
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
 
+    // لتتبع الصفحة المرئية بدقة
+    @State private var visiblePage = 0
+
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0) {
         self.manga = manga
         self.chapter = chapter
@@ -29,9 +32,7 @@ struct ReaderView: View {
     }
 
     var currentChapterNumber: String {
-        guard let lastBoundary = chapterBoundaries.last(where: { $0.startIndex <= currentPage }) else {
-            return chapter.number
-        }
+        guard let lastBoundary = chapterBoundaries.last(where: { $0.startIndex <= currentPage }) else { return chapter.number }
         return manga.chapters.first(where: { $0.slug == lastBoundary.slug })?.number ?? chapter.number
     }
 
@@ -56,13 +57,25 @@ struct ReaderView: View {
                                 }
                                 MangaPageImage(url: page.url)
                                     .id(idx)
-                                    .onAppear {
-                                        currentPage = idx
-                                        saveProgress(pageIndex: idx)
-                                        if idx >= allPages.count - 5 && !loadingNextChapter {
-                                            Task { await loadNextChapter() }
-                                        }
-                                    }
+                                    .background(GeometryReader { geo in
+                                        Color.clear.preference(key: PageOffsetKey.self, value: [idx: geo.frame(in: .named("reader_space")).minY])
+                                    })
+                            }
+                        }
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: ScrollOffsetKey.self, value: proxy.frame(in: .named("reader_space")).minY)
+                        })
+                    }
+                    .coordinateSpace(name: "reader_space")
+                    .onPreferenceChange(PageOffsetKey.self) { offsets in
+                        // إيجاد الصفحة الأقرب لأعلى الشاشة
+                        guard let closest = offsets.min(by: { abs($0.value) < abs($1.value) }) else { return }
+                        if closest.key != visiblePage {
+                            visiblePage = closest.key
+                            currentPage = visiblePage
+                            saveProgress(pageIndex: visiblePage)
+                            if visiblePage >= allPages.count - 5 && !loadingNextChapter {
+                                Task { await loadNextChapter() }
                             }
                         }
                     }
@@ -74,29 +87,11 @@ struct ReaderView: View {
                         if showUI { resetUITimer() }
                     }
                 }
-            }
 
-            // زر الإغلاق
-            VStack {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(width: 34, height: 34)
-                            .background(.black.opacity(0.7))
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.5), radius: 4)
-                    }
-                    Spacer()
-                }
-                .padding(.top, 56)
-                .padding(.leading, 16)
-                Spacer()
+                VStack { HStack { closeButton }; Spacer() }
+                if showUI { topBar }
+                VStack { Spacer(); bottomBar }
             }
-
-            if showUI { topBar }
-            VStack { Spacer(); bottomBar }
         }
         .ignoresSafeArea(edges: .bottom)
         .statusBarHidden(!showUI)
@@ -104,31 +99,35 @@ struct ReaderView: View {
         .onAppear { resetUITimer() }
     }
 
+    private var closeButton: some View {
+        Button { dismiss() } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 34, height: 34)
+                .background(.black.opacity(0.7))
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.5), radius: 4)
+        }
+        .padding(.top, 56)
+        .padding(.leading, 16)
+    }
+
     var topBar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(manga.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                Text("Chapter \(currentChapterNumber)")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.55))
+                Text(manga.title).font(.system(size: 14, weight: .semibold)).foregroundColor(.white).lineLimit(1)
+                Text("Chapter \(currentChapterNumber)").font(.system(size: 12)).foregroundColor(.white.opacity(0.55))
             }
             Spacer()
             if !allPages.isEmpty {
                 Text("\(currentPage + 1) / \(allPages.count)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.75))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.black.opacity(0.55))
-                    .clipShape(Capsule())
+                    .font(.system(size: 12, weight: .medium)).foregroundColor(.white.opacity(0.75))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.black.opacity(0.55)).clipShape(Capsule())
             }
         }
-        .padding(.horizontal, 60)
-        .padding(.top, 56)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 60).padding(.top, 56).padding(.bottom, 14)
         .background(LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom))
         .transition(.opacity)
     }
@@ -139,13 +138,11 @@ struct ReaderView: View {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Rectangle().fill(Color.white.opacity(0.08))
-                        Rectangle()
-                            .fill(ZTheme.accent)
+                        Rectangle().fill(ZTheme.accent)
                             .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
                             .animation(.easeOut(duration: 0.15), value: currentPage)
                     }
-                }
-                .frame(height: 2)
+                }.frame(height: 2)
             }
         }
     }
@@ -161,12 +158,7 @@ struct ReaderView: View {
         VStack(spacing: 20) {
             Image(systemName: "book.closed").font(.system(size: 44, weight: .ultraLight)).foregroundColor(.white.opacity(0.5))
             Text("No pages found").font(.system(size: 14)).foregroundColor(.white.opacity(0.6))
-            Button("Go Back") { dismiss() }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(ZTheme.bg)
-                .padding(.horizontal, 24).padding(.vertical, 10)
-                .background(ZTheme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+            Button("Go Back") { dismiss() }.font(.system(size: 15, weight: .semibold)).foregroundColor(ZTheme.bg).padding(.horizontal, 24).padding(.vertical, 10).background(ZTheme.accent).clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
 
@@ -174,8 +166,7 @@ struct ReaderView: View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle").font(.system(size: 44, weight: .ultraLight)).foregroundColor(ZTheme.danger)
             Text(err).font(.system(size: 14)).foregroundColor(.white.opacity(0.6)).multilineTextAlignment(.center).padding(.horizontal, 32)
-            Button("Retry") { Task { await loadInitialChapter() } }
-                .font(.system(size: 15, weight: .semibold)).foregroundColor(ZTheme.bg).padding(.horizontal, 24).padding(.vertical, 10).background(ZTheme.accent).clipShape(RoundedRectangle(cornerRadius: 10))
+            Button("Retry") { Task { await loadInitialChapter() } }.font(.system(size: 15, weight: .semibold)).foregroundColor(ZTheme.bg).padding(.horizontal, 24).padding(.vertical, 10).background(ZTheme.accent).clipShape(RoundedRectangle(cornerRadius: 10))
             Button("Go Back") { dismiss() }.foregroundColor(ZTheme.accent)
         }
     }
@@ -200,11 +191,9 @@ struct ReaderView: View {
     func loadNextChapter() async {
         guard let currentBoundary = chapterBoundaries.last else { return }
         let loadedSlugs = Set(loadedChapters)
-        guard let currentIdx = allChapters.firstIndex(where: { $0.slug == currentBoundary.slug }),
-              currentIdx + 1 < allChapters.count else { return }
+        guard let currentIdx = allChapters.firstIndex(where: { $0.slug == currentBoundary.slug }), currentIdx + 1 < allChapters.count else { return }
         let nextChapter = allChapters[currentIdx + 1]
         guard !loadedSlugs.contains(nextChapter.slug) else { return }
-
         await MainActor.run { loadingNextChapter = true }
         do {
             let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug)
@@ -222,17 +211,13 @@ struct ReaderView: View {
 
     func saveProgress(pageIndex: Int) {
         let chapterSlug: String = {
-            for b in chapterBoundaries.reversed() {
-                if pageIndex >= b.startIndex { return b.slug }
-            }
+            for b in chapterBoundaries.reversed() { if pageIndex >= b.startIndex { return b.slug } }
             return chapter.slug
         }()
         let chapterNum = manga.chapters.first(where: { $0.slug == chapterSlug })?.number ?? chapter.number
         let localPageIndex = pageIndex - (chapterBoundaries.first(where: { $0.slug == chapterSlug })?.startIndex ?? 0)
-        let progress = ReadingProgress(
-            mangaSlug: manga.slug, mangaTitle: manga.title, mangaCover: manga.coverURL,
-            chapterSlug: chapterSlug, chapterNumber: chapterNum, pageIndex: localPageIndex
-        )
+        let progress = ReadingProgress(mangaSlug: manga.slug, mangaTitle: manga.title, mangaCover: manga.coverURL,
+                                       chapterSlug: chapterSlug, chapterNumber: chapterNum, pageIndex: localPageIndex)
         store.saveProgress(progress)
     }
 
@@ -244,18 +229,18 @@ struct ReaderView: View {
     }
 }
 
-// MARK: - Manga Page Image
-struct MangaPageImage: View {
-    let url: String
-    var body: some View {
-        CachedAsyncImage(url: URL(string: url))
-            .scaledToFit()
-            .frame(maxWidth: .infinity)
-            .background(Color.black)
+struct PageOffsetKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
     }
 }
 
-// MARK: - Chapter Separator
+struct ScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct ChapterSeparator: View {
     let number: String
     var body: some View {
@@ -264,15 +249,23 @@ struct ChapterSeparator: View {
             Text("Chapter \(number)")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(ZTheme.accent)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(ZTheme.accent.opacity(0.1))
                 .overlay(Capsule().stroke(ZTheme.accent.opacity(0.3), lineWidth: 1))
                 .clipShape(Capsule())
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 20)
+        .padding(.horizontal, 20).padding(.vertical, 20)
         .background(Color.black)
+    }
+}
+
+struct MangaPageImage: View {
+    let url: String
+    var body: some View {
+        CachedAsyncImage(url: URL(string: url))
+            .scaledToFit()
+            .frame(maxWidth: .infinity)
+            .background(Color.black)
     }
 }
