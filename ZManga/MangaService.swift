@@ -22,39 +22,39 @@ class MangaService: NSObject, ObservableObject {
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         let webView = getWebView()
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        webView.load(request)
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var observer: NSKeyValueObservation?
-            observer = webView.observe(\.isLoading, options: [.new]) { _, change in
-                if change.newValue == false {
-                    observer?.invalidate()
-                    continuation.resume()
+        // إلغاء أي تحميل سابق لمنع التداخل بين الطلبات
+        webView.stopLoading()
+
+        return try await withCheckedThrowingContinuation { continuation in
+            var observation: NSKeyValueObservation?
+            observation = webView.observe(\.isLoading, options: [.initial, .new]) { _, change in
+                guard let newValue = change.newValue else { return }
+                // نتأكد أن التحميل بدأ ثم انتهى
+                if !newValue && change.oldValue == true {
+                    observation?.invalidate()
+                    webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                        if let html = result as? String {
+                            if html.contains("Just a moment") ||
+                               html.contains("cf-browser-verification") ||
+                               html.contains("Checking your browser") ||
+                               html.contains("Attention Required") {
+                                AppStore.currentStore?.triggerCloudflare(url: url)
+                                continuation.resume(throwing: ZMangaError.cloudflareChallenge)
+                            } else {
+                                continuation.resume(returning: html)
+                            }
+                        } else {
+                            continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                        }
+                    }
                 }
             }
-        }
 
-        let html: String = try await withCheckedThrowingContinuation { continuation in
-            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                if let html = result as? String {
-                    continuation.resume(returning: html)
-                } else {
-                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                }
-            }
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            webView.load(request)
         }
-
-        if html.contains("Just a moment") ||
-           html.contains("cf-browser-verification") ||
-           html.contains("Checking your browser") ||
-           html.contains("Attention Required") {
-            AppStore.currentStore?.triggerCloudflare(url: url)
-            throw ZMangaError.cloudflareChallenge
-        }
-
-        return html
     }
 
     // MARK: - Public API
@@ -83,21 +83,17 @@ class MangaService: NSObject, ObservableObject {
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
-
-        // 1. تحميل الصفحة أولاً للحصول على chapter_id
         let html = try await fetchHTML(urlString: url)
 
-        // 2. محاولة AJAX أولاً (الأسرع والأموثق)
-        if let chapterId = firstCapture(
-            pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
-            in: html
-        ) {
+        // 1. محاولة AJAX أولاً بنمط مرن لـ chapter_id
+        let chapterIdPattern = #"wp-manga-current-chap[^>]+data-id="(\d+)"|data-id="(\d+)"[^>]+wp-manga-current-chap"#
+        if let chapterId = firstCapture(pattern: chapterIdPattern, in: html) {
             if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
                 return pages
             }
         }
 
-        // 3. الـ WebView محمّل بالفعل — الآن ننتظر حتى يُحقن lazy loading الصور في DOM
+        // 2. انتظار الصور الكسولة (lazy loading) إذا لزم الأمر
         let webView = getWebView()
         let waitJS = """
         new Promise((resolve) => {
@@ -112,7 +108,6 @@ class MangaService: NSObject, ObservableObject {
                 if (hasRealSrc || attempts >= 30) resolve(attempts);
                 else setTimeout(check, 300);
             };
-            // أعط الـ JS وقتاً ليبدأ
             setTimeout(check, 800);
         });
         """
@@ -121,7 +116,6 @@ class MangaService: NSObject, ObservableObject {
             webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
         }
 
-        // 4. الآن اجلب الـ HTML بعد أن عمل الـ lazy loading
         let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -132,8 +126,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        let pages = parseChapterPages(html: updatedHTML)
-        return pages
+        return parseChapterPages(html: updatedHTML)
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -153,7 +146,6 @@ class MangaService: NSObject, ObservableObject {
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
 
-        // نسخ الكوكيز من WebView إلى الطلب
         let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
         let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
@@ -168,7 +160,6 @@ class MangaService: NSObject, ObservableObject {
             return []
         }
 
-        // محاولة تفسير الـ response كـ JSON (مصفوفة أو كائن ببيانات)
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
@@ -176,8 +167,6 @@ class MangaService: NSObject, ObservableObject {
            let images = jsonDict["data"] as? [[String: Any]] {
             return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
-
-        // إذا كان الـ response عبارة عن HTML (حالة نادرة)
         if let html = String(data: data, encoding: .utf8), html.contains("<img") {
             return parseChapterPages(html: html)
         }
@@ -224,7 +213,6 @@ class MangaService: NSObject, ObservableObject {
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
-    // ✅ الإصلاح الوحيد هنا
     private func parseMangaSimple(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
@@ -236,7 +224,6 @@ class MangaService: NSObject, ObservableObject {
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200, slug != "feed", !slug.contains("cdn-cgi") else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                // نبحث عن الصورة في نطاق 2000 حرف بعد رابط المانجا فقط
                 let searchRange = NSRange(location: match.range.location,
                                           length: min(nsHtml.length - match.range.location, 2000))
                 let allImgTags = extractHTMLTags(named: "img", from: nsHtml.substring(with: searchRange))
@@ -323,34 +310,33 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (يدعم data-lazy-src + استخراج محتوى reading-content)
+    // MARK: - Parse Chapter Pages (محسّنة – تجمع الصور من كل الأنماط دفعة واحدة)
 
     private func parseChapterPages(html: String) -> [String] {
-        var pages: [String] = []
         let content = extractReadingContent(html: html)
+        var seen = Set<String>()
+        var pages: [String] = []
 
-        let patterns: [(String, NSRegularExpression.Options)] = [
-            (#"<img[^>]+data-lazy-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+data-src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*data-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+(?:data-src|data-lazy-src|src)="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-        ]
+        let allImgPattern = #"<img\s[^>]*>"#
+        guard let imgRegex = try? NSRegularExpression(pattern: allImgPattern,
+            options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return [] }
 
-        for (pattern, options) in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
-            let c = content as NSString
-            regex.enumerateMatches(in: content, range: NSRange(location: 0, length: c.length)) { match, _, _ in
-                guard let match = match, match.numberOfRanges >= 2 else { return }
-                let url = c.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if url.hasPrefix("http") && !isLogoOnly(url) && !pages.contains(url) {
-                    pages.append(url)
-                }
+        let nsContent = content as NSString
+        imgRegex.enumerateMatches(in: content, range: NSRange(location: 0, length: nsContent.length)) { match, _, _ in
+            guard let match = match else { return }
+            let tag = nsContent.substring(with: match.range)
+            let url = firstCapture(pattern: #"data-lazy-src="([^"]+)""#, in: tag)
+                   ?? firstCapture(pattern: #"data-src="([^"]+)""#, in: tag)
+                   ?? firstCapture(pattern: #"src="([^"]+)""#, in: tag)
+            if let url = url?.trimmingCharacters(in: .whitespacesAndNewlines),
+               url.hasPrefix("http"),
+               !url.contains("data:image"),
+               !isLogoOnly(url),
+               !seen.contains(url) {
+                seen.insert(url)
+                pages.append(url)
             }
-            if !pages.isEmpty { break }
         }
-
         return pages
     }
 
@@ -392,7 +378,7 @@ class MangaService: NSObject, ObservableObject {
         return remaining
     }
 
-    // MARK: - دوال مساعدة لاستخراج الصور
+    // MARK: - دوال مساعدة
 
     private func extractHTMLTags(named tagName: String, from html: String) -> [String] {
         let pattern = "<\(tagName)\\s[^>]*>"
@@ -408,18 +394,15 @@ class MangaService: NSObject, ObservableObject {
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
         for tag in tags {
-            // data-lazy-src أولاً
-            if let dataLazy = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag) {
+            if let dataLazy = firstCapture(pattern: #"data-lazy-src="([^"]+)""#, in: tag) {
                 let url = dataLazy.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
-            // data-src
-            if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
+            if let dataSrc = firstCapture(pattern: #"data-src="([^"]+)""#, in: tag) {
                 let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
-            // src
-            if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
+            if let src = firstCapture(pattern: #"src="([^"]+)""#, in: tag) {
                 let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") && !isLogoOnly(url) { return url }
             }
@@ -431,8 +414,6 @@ class MangaService: NSObject, ObservableObject {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         return regex.firstMatch(in: text as String, range: range)
     }
-
-    // MARK: - Helpers
 
     private func firstCapture(pattern: String, in text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
