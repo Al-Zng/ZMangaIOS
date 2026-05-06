@@ -57,7 +57,7 @@ class MangaService: NSObject, ObservableObject {
         return html
     }
 
-    // MARK: - Public API (الروابط كلها تستخدم baseURL الجديد)
+    // MARK: - Public API
 
     func fetchLatest(page: Int = 1) async throws -> [Manga] {
         let html = try await fetchHTML(urlString: "\(baseURL)/manga/?m_orderby=latest&page=\(page)")
@@ -188,7 +188,6 @@ class MangaService: NSObject, ObservableObject {
         }
 
         var chapters: [Chapter] = []
-        // PDF: الفصول داخل li.wp-manga-chapter مع span.chapter-release-date
         let chapterBlockPattern = #"<li class="wp-manga-chapter[^"]*">(.*?)</li>"#
         if let blockRegex = try? NSRegularExpression(pattern: chapterBlockPattern, options: [.dotMatchesLineSeparators]) {
             blockRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
@@ -223,25 +222,37 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (مبني على البنية الجديدة التي أرسلتها)
+    // MARK: - Parse Chapter Pages (حل جذري لمشكلة ترتيب السمات)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // نمط يطابق الصورة التي أرسلتها بالضبط:
-        // <img id="image-..." src="https://lekstorm.lekmanga.site/wp-content/uploads/WP-manga/..." class="wp-manga-chapter-img">
-        let imgPattern = #"<img\s+[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#
-        guard let regex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators]) else {
+        // الخطوة 1: البحث عن جميع وسوم img التي تحتوي على "wp-manga-chapter-img" بأي ترتيب
+        let tagPattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#
+        guard let tagRegex = try? NSRegularExpression(pattern: tagPattern,
+                                                      options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
             return pages
         }
 
-        regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-            guard let match = match, match.numberOfRanges >= 2 else { return }
-            let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-            // نضيف الرابط مباشرة دون فلترة إضافية لأنه واضح وصحيح
-            if url.hasPrefix("http") && !pages.contains(url) {
-                pages.append(url)
+        let matches = tagRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+
+        // الخطوة 2: من كل وسم img مستخرج، نستخرج قيمة src
+        let srcPattern = #"src="([^"]+)""#
+        guard let srcRegex = try? NSRegularExpression(pattern: srcPattern,
+                                                      options: [.caseInsensitive]) else {
+            return pages
+        }
+
+        for match in matches {
+            let imgTag = ns.substring(with: match.range)
+            if let srcMatch = srcRegex.firstMatch(in: imgTag,
+                                                  range: NSRange(location: 0, length: imgTag.utf16.count)) {
+                let url = (imgTag as NSString).substring(with: srcMatch.range(at: 1))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if url.hasPrefix("http") && !pages.contains(url) {
+                    pages.append(url)
+                }
             }
         }
 
