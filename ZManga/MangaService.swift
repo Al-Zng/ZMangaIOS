@@ -69,10 +69,14 @@ class MangaService: NSObject, ObservableObject {
                            html.contains("Attention Required")
         Logger.shared.log("Cloudflare detected: \(isCloudflare)", category: "MangaService")
         if isCloudflare {
-            Logger.shared.log("Triggering Cloudflare sheet for URL: \(url.absoluteString)", category: "MangaService")
-            AppStore.currentStore?.triggerCloudflare(url: url)
-            throw ZMangaError.cloudflareChallenge
-        }
+    Logger.shared.log("Triggering Cloudflare sheet for URL: \(url.absoluteString)", category: "MangaService")
+    await MainActor.run {
+        AppStore.currentStore?.triggerCloudflare(url: url)
+    }
+    // ننتظر قليلاً حتى تعرض الشاشة قبل إلغاء المهمة
+    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 ثانية
+    throw ZMangaError.cloudflareChallenge
+}
 
         return html
     }
