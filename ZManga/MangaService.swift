@@ -224,6 +224,7 @@ class MangaService: NSObject, ObservableObject {
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
+    // ✅ الإصلاح الوحيد هنا
     private func parseMangaSimple(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
@@ -235,6 +236,7 @@ class MangaService: NSObject, ObservableObject {
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200, slug != "feed", !slug.contains("cdn-cgi") else { return }
             if !results.contains(where: { $0.slug == slug }) {
+                // نبحث عن الصورة في نطاق 2000 حرف بعد رابط المانجا فقط
                 let searchRange = NSRange(location: match.range.location,
                                           length: min(nsHtml.length - match.range.location, 2000))
                 let allImgTags = extractHTMLTags(named: "img", from: nsHtml.substring(with: searchRange))
@@ -321,32 +323,32 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (النسخة المبسّطة من الملخص)
+    // MARK: - Parse Chapter Pages (يدعم data-lazy-src + استخراج محتوى reading-content)
+
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let content = extractReadingContent(html: html)
 
-        // نمطان فقط: data-src/data-lazy-src ثم src العادي
-        let patterns: [String] = [
-            #"<img[^>]+(?:data-src|data-lazy-src)\s*=\s*"([^"]+)""#,
-            #"<img[^>]+src\s*=\s*"([^"]+)""#
+        let patterns: [(String, NSRegularExpression.Options)] = [
+            (#"<img[^>]+data-lazy-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+            (#"<img[^>]+data-src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+            (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*data-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+            (#"<img[^>]+src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+            (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+            (#"<img[^>]+(?:data-src|data-lazy-src|src)="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
         ]
 
-        let nsContent = content as NSString
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
-            regex.enumerateMatches(in: content, range: NSRange(location: 0, length: nsContent.length)) { match, _, _ in
+        for (pattern, options) in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
+            let c = content as NSString
+            regex.enumerateMatches(in: content, range: NSRange(location: 0, length: c.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
-                let url = nsContent.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if url.hasPrefix("http") &&
-                   !url.contains("data:image") &&
-                   !isLogoOnly(url) &&
-                   !pages.contains(url) {
+                let url = c.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if url.hasPrefix("http") && !isLogoOnly(url) && !pages.contains(url) {
                     pages.append(url)
                 }
             }
-            // إذا حصلنا على عدد معقول من الصور، نكتفي بهذا النمط
-            if pages.count > 5 { break }
+            if !pages.isEmpty { break }
         }
 
         return pages
@@ -390,7 +392,7 @@ class MangaService: NSObject, ObservableObject {
         return remaining
     }
 
-    // MARK: - دوال مساعدة
+    // MARK: - دوال مساعدة لاستخراج الصور
 
     private func extractHTMLTags(named tagName: String, from html: String) -> [String] {
         let pattern = "<\(tagName)\\s[^>]*>"
@@ -406,14 +408,17 @@ class MangaService: NSObject, ObservableObject {
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
         for tag in tags {
+            // data-lazy-src أولاً
             if let dataLazy = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataLazy.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
+            // data-src
             if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
+            // src
             if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") && !isLogoOnly(url) { return url }
@@ -426,6 +431,8 @@ class MangaService: NSObject, ObservableObject {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         return regex.firstMatch(in: text as String, range: range)
     }
+
+    // MARK: - Helpers
 
     private func firstCapture(pattern: String, in text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }

@@ -107,7 +107,7 @@ class DownloadManager: ObservableObject {
         let chapterSlug: String
         let chapterNumber: String
         let mangaTitle: String
-        let mangaCover: String
+        let mangaCover: String          // ← الغلاف
         let pages: [String]
         let downloadedAt: Date
     }
@@ -161,7 +161,7 @@ class DownloadManager: ObservableObject {
                 try data.write(to: filePath)
                 localPaths.append(filePath.path)
             } catch {
-                localPaths.append(urlStr)
+                localPaths.append(urlStr) // fallback
             }
             activeDownloads[key] = Double(idx + 1) / Double(urls.count)
         }
@@ -351,7 +351,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (آلية إعادة المحاولة محسّنة)
+// MARK: - Cached Async Image
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -428,11 +428,11 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        let urlHost = url.host ?? ""
-        let referer = "https://lekmanga.site/"
+        let referer = url.absoluteString.contains("lekstorm") ?
+            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
-        for i in 0..<3 {
-            attempt = i + 1
+        for _ in 0..<3 {
+            attempt += 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
@@ -443,23 +443,17 @@ struct CachedAsyncImage: View {
             if !cookieHeader.isEmpty {
                 request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
             }
-            
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse {
-                    if httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
-                        await MainActor.run { image = img; isLoading = false }
-                        return
-                    } else if httpResp.statusCode == 403 {
-                        print("Image 403 for: \(url.absoluteString)")
-                    }
+                if let httpResp = response as? HTTPURLResponse,
+                   httpResp.statusCode == 200,
+                   let img = UIImage(data: data),
+                   img.size.width > 0 {
+                    await MainActor.run { image = img; isLoading = false }
+                    return
                 }
             } catch {
-                print("Image load error: \(error.localizedDescription)")
-            }
-            
-            if i < 2 {
-                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * Double(i + 1)))
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
