@@ -69,7 +69,6 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // تمّ إزالة تصفية coverURL الفارغة هنا لتظهر كل نتائج البحث
     func search(query: String, page: Int = 1) async throws -> [Manga] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let html = try await fetchHTML(urlString: "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)")
@@ -82,12 +81,11 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaDetail(html: html, slug: slug)
     }
 
-    // تمّ اختصار منطق الانتظار: AJAX أولاً، ثم تحليل فوري للـHTML إن فشل
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
         let html = try await fetchHTML(urlString: url)
 
-        // 1. محاولة AJAX (سريعة)
+        // 1. محاولة AJAX أولاً (سريعة)
         if let chapterId = firstCapture(
             pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
             in: html
@@ -101,7 +99,7 @@ class MangaService: NSObject, ObservableObject {
         let directParse = parseChapterPages(html: html)
         if !directParse.isEmpty { return directParse }
 
-        // 3. لا ننتظر أبداً – نُظهر خطأ ودّي (سيظهر زر 'Retry' في ReaderView)
+        // 3. لا ننتظر أبداً – نُظهر خطأ ودّي
         throw ZMangaError.networkError("Images could not be loaded")
     }
 
@@ -110,7 +108,7 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - AJAX Image Fetching (كما قُمت بتطويره)
+    // MARK: - AJAX Image Fetching
 
     private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
         guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
@@ -285,7 +283,7 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages
+    // MARK: - Parse Chapter Pages (يدعم data-lazy-src + استخراج محتوى reading-content)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
