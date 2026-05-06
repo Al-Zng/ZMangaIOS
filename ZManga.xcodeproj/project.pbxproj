@@ -19,6 +19,8 @@
     AA000026 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000027; };
     AA000028 /* CloudflareWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000029; };
     AA000031 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000030; };
+    AA000033 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000032; };
+    AA000035 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000034; };
 
     /* ---------- File References ---------- */
     AA000004 /* ZMangaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZMangaApp.swift; path = ZManga/ZMangaApp.swift; sourceTree = "<group>"; };
@@ -35,6 +37,8 @@
     AA000027 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryView.swift; path = ZManga/LibraryView.swift; sourceTree = "<group>"; };
     AA000029 /* CloudflareWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudflareWebView.swift; path = ZManga/CloudflareWebView.swift; sourceTree = "<group>"; };
     AA000030 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = ZManga/SettingsView.swift; sourceTree = "<group>"; };
+    AA000032 /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DownloadsView.swift; path = ZManga/DownloadsView.swift; sourceTree = "<group>"; };
+    AA000034 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkMonitor.swift; path = ZManga/NetworkMonitor.swift; sourceTree = "<group>"; };
 
     /* ---------- Build Phases ---------- */
     AA000007 /* Sources */ = {
@@ -52,7 +56,9 @@
         AA000024,
         AA000026,
         AA000028,
-        AA000031,  /* ← SettingsView.swift added */
+        AA000031,
+        AA000033,
+        AA000035,
       );
       runOnlyForDeploymentPostprocessing = 0;
     };
@@ -75,20 +81,22 @@
     AA000008 = {
       isa = PBXGroup;
       children = (
-        AA000004,  /* ZMangaApp.swift */
-        AA000005,  /* ContentView.swift */
-        AA000013,  /* Models.swift */
-        AA000015,  /* MangaService.swift */
-        AA000017,  /* HomeView.swift */
-        AA000019,  /* SearchView.swift */
-        AA000021,  /* MangaDetailView.swift */
-        AA000023,  /* ReaderView.swift */
-        AA000025,  /* HistoryView.swift */
-        AA000027,  /* LibraryView.swift */
-        AA000029,  /* CloudflareWebView.swift */
-        AA000030,  /* SettingsView.swift ← added */
-        AA000006,  /* Info.plist */
-        AA00000E,  /* Products */
+        AA000004, /* ZMangaApp.swift */
+        AA000005, /* ContentView.swift */
+        AA000013, /* Models.swift */
+        AA000015, /* MangaService.swift */
+        AA000017, /* HomeView.swift */
+        AA000019, /* SearchView.swift */
+        AA000021, /* MangaDetailView.swift */
+        AA000023, /* ReaderView.swift */
+        AA000025, /* HistoryView.swift */
+        AA000027, /* LibraryView.swift */
+        AA000029, /* CloudflareWebView.swift */
+        AA000030, /* SettingsView.swift */
+        AA000032, /* DownloadsView.swift */
+        AA000034, /* NetworkMonitor.swift */
+        AA000006, /* Info.plist */
+        AA00000E, /* Products */
       );
       sourceTree = "<group>";
     };
@@ -97,9 +105,15 @@
     AA000009 = {
       isa = PBXNativeTarget;
       buildConfigurationList = AA00000A;
-      buildPhases = (AA000011, AA000007, AA000010);
-      buildRules = ();
-      dependencies = ();
+      buildPhases = (
+        AA000011,
+        AA000007,
+        AA000010,
+      );
+      buildRules = (
+      );
+      dependencies = (
+      );
       name = ZManga;
       productName = ZManga;
       productReference = AA00000B;
@@ -109,7 +123,10 @@
     /* ---------- Build Configurations ---------- */
     AA00000A = {
       isa = XCConfigurationList;
-      buildConfigurations = (AA00000C, AA00000D);
+      buildConfigurations = (
+        AA00000C,
+        AA00000D,
+      );
       defaultConfigurationIsVisible = 0;
       defaultConfigurationName = Release;
     };
@@ -148,7 +165,9 @@
     /* ---------- Products Group ---------- */
     AA00000E = {
       isa = PBXGroup;
-      children = (AA00000B);
+      children = (
+        AA00000B,
+      );
       name = Products;
       sourceTree = "<group>";
     };
@@ -156,36 +175,50 @@
     /* ---------- Project ---------- */
     BB000001 = {
       isa = XCConfigurationList;
-      buildConfigurations = (BB000002, BB000003);
+      buildConfigurations = (
+        BB000002,
+        BB000003,
+      );
       defaultConfigurationIsVisible = 0;
       defaultConfigurationName = Release;
     };
 
     BB000002 = {
       isa = XCBuildConfiguration;
-      buildSettings = { SDKROOT = iphoneos; };
+      buildSettings = {
+        SDKROOT = iphoneos;
+      };
       name = Debug;
     };
 
     BB000003 = {
       isa = XCBuildConfiguration;
-      buildSettings = { SDKROOT = iphoneos; };
+      buildSettings = {
+        SDKROOT = iphoneos;
+      };
       name = Release;
     };
 
     CC000001 = {
       isa = PBXProject;
-      attributes = { LastUpgradeCheck = 1500; };
+      attributes = {
+        LastUpgradeCheck = 1500;
+      };
       buildConfigurationList = BB000001;
       compatibilityVersion = "Xcode 13.0";
       developmentRegion = en;
       hasScannedForEncodings = 0;
-      knownRegions = (en, Base);
+      knownRegions = (
+        en,
+        Base,
+      );
       mainGroup = AA000008;
       productRefGroup = AA00000E;
       projectDirPath = "";
       projectRoot = "";
-      targets = (AA000009);
+      targets = (
+        AA000009,
+      );
     };
 
   };
