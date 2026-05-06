@@ -7,11 +7,7 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    // تم حذف الخاصية المشتركة webView لتجنب التعارض
-    // private var webView: WKWebView?
-    // private func getWebView() -> WKWebView { ... }
-
-    // MARK: - دالة جلب HTML الأساسية (تُنشئ WebView جديداً كل مرة)
+    // MARK: - جلب HTML الأساسي
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
@@ -24,7 +20,6 @@ class MangaService: NSObject, ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(request)
 
-        // انتظار حتى ينتهي التحميل
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var observer: NSKeyValueObservation?
             observer = webView.observe(\.isLoading, options: [.new]) { _, change in
@@ -35,7 +30,6 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // جلب HTML النهائي
         let html: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -46,7 +40,6 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // التحقق من Cloudflare
         if html.contains("Just a moment") ||
            html.contains("cf-browser-verification") ||
            html.contains("Checking your browser") ||
@@ -58,7 +51,7 @@ class MangaService: NSObject, ObservableObject {
         return html
     }
 
-    // MARK: - دالة خاصة بـ fetchChapterPages تحتاج WebView بعد التحميل
+    // MARK: - جلب HTML مع إرجاع WebView (لحاجة الفصول)
     private func fetchHTMLForChapter(urlString: String) async throws -> (html: String, webView: WKWebView) {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
@@ -127,56 +120,52 @@ class MangaService: NSObject, ObservableObject {
     }
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
-        let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+        return try await withTimeout(seconds: 25) {
+            let url = "\(self.baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+            let (html, webView) = try await self.fetchHTMLForChapter(urlString: url)
 
-        // 1. تحميل الصفحة والحصول على الـ webView العامل
-        let (html, webView) = try await fetchHTMLForChapter(urlString: url)
-
-        // 2. محاولة AJAX أولاً (الأسرع والأمثل)
-        if let chapterId = firstCapture(
-            pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
-            in: html
-        ) {
-            if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
-                return pages
-            }
-        }
-
-        // 3. الانتظار حتى تُحقن الصور في DOM عبر lazy loading (باستخدام نفس webView)
-        let waitJS = """
-        new Promise((resolve) => {
-            let attempts = 0;
-            const check = () => {
-                attempts++;
-                const imgs = document.querySelectorAll('.reading-content img');
-                const hasRealSrc = Array.from(imgs).some(img => {
-                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
-                    return src.startsWith('http') && !src.includes('data:image');
-                });
-                if (hasRealSrc || attempts >= 30) resolve(attempts);
-                else setTimeout(check, 300);
-            };
-            setTimeout(check, 800);
-        });
-        """
-
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
-        }
-
-        // 4. جلب HTML المحدث بعد lazy loading
-        let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
-            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                if let html = result as? String {
-                    continuation.resume(returning: html)
-                } else {
-                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+            if let chapterId = self.firstCapture(
+                pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
+                in: html
+            ) {
+                if let pages = try? await self.fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
+                    return pages
                 }
             }
-        }
 
-        let pages = parseChapterPages(html: updatedHTML)
-        return pages
+            let waitJS = """
+            new Promise((resolve) => {
+                let attempts = 0;
+                const check = () => {
+                    attempts++;
+                    const imgs = document.querySelectorAll('.reading-content img');
+                    const hasRealSrc = Array.from(imgs).some(img => {
+                        const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
+                        return src.startsWith('http') && !src.includes('data:image');
+                    });
+                    if (hasRealSrc || attempts >= 30) resolve(attempts);
+                    else setTimeout(check, 300);
+                };
+                setTimeout(check, 800);
+            });
+            """
+
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
+            }
+
+            let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
+                webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                    if let html = result as? String {
+                        continuation.resume(returning: html)
+                    } else {
+                        continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                    }
+                }
+            }
+
+            return self.parseChapterPages(html: updatedHTML)
+        }
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -184,13 +173,13 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - AJAX Image Fetching
-
+    // MARK: - AJAX
     private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
         guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
 
         var request = URLRequest(url: ajaxURL)
         request.httpMethod = "POST"
+        request.timeoutInterval = 10
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(baseURL, forHTTPHeaderField: "Referer")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
@@ -198,17 +187,13 @@ class MangaService: NSObject, ObservableObject {
 
         let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
         let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-        if !cookieHeader.isEmpty {
-            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        }
+        if !cookieHeader.isEmpty { request.setValue(cookieHeader, forHTTPHeaderField: "Cookie") }
 
         let body = "action=manga_get_chapter_img_list&chapter_id=\(chapterId)"
         request.httpBody = body.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return []
-        }
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return [] }
 
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
@@ -217,16 +202,13 @@ class MangaService: NSObject, ObservableObject {
            let images = jsonDict["data"] as? [[String: Any]] {
             return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
-
         if let html = String(data: data, encoding: .utf8), html.contains("<img") {
             return parseChapterPages(html: html)
         }
-
         return []
     }
 
     // MARK: - Parse Manga List
-
     private func parseMangaList(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
         let cardPattern = #"<div class="page-item-detail[^"]*manga[^"]*">(.*?)</div>\s*</div>\s*</div>"#
@@ -275,11 +257,12 @@ class MangaService: NSObject, ObservableObject {
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200, slug != "feed", !slug.contains("cdn-cgi") else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                let allImgTags = extractHTMLTags(named: "img", from: html)
+                let searchRange = NSRange(location: match.range.location, length: min(nsHtml.length - match.range.location, 2000))
+                let allImgTags = extractHTMLTags(named: "img", from: nsHtml.substring(with: searchRange))
                 let cover = extractImageURL(fromTags: allImgTags) ?? ""
                 var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: isLogoOnly(cover) ? "" : cover)
                 if extractChapterInfo {
-                    let info = parseLatestChapterInfo(from: nsHtml.substring(with: match.range))
+                    let info = parseLatestChapterInfo(from: nsHtml.substring(with: searchRange))
                     manga.latestChapterNumber = info.chapter; manga.lastUpdated = info.time
                 }
                 results.append(manga)
@@ -296,7 +279,6 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - Parse Manga Detail
-
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
         let summaryBlock = firstCapture(pattern: #"(<div class="summary_image[^"]*">.*?</div>)"#, in: html) ?? html
@@ -360,7 +342,6 @@ class MangaService: NSObject, ObservableObject {
     }
 
     // MARK: - Parse Chapter Pages
-
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let content = extractReadingContent(html: html)
@@ -428,8 +409,7 @@ class MangaService: NSObject, ObservableObject {
         return remaining
     }
 
-    // MARK: - دوال مساعدة لاستخراج الصور
-
+    // MARK: - مساعدات
     private func extractHTMLTags(named tagName: String, from html: String) -> [String] {
         let pattern = "<\(tagName)\\s[^>]*>"
         guard let regex = try? NSRegularExpression(pattern: pattern,
@@ -465,8 +445,6 @@ class MangaService: NSObject, ObservableObject {
         return regex.firstMatch(in: text as String, range: range)
     }
 
-    // MARK: - Helpers
-
     private func firstCapture(pattern: String, in text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         let ns = text as NSString
@@ -491,6 +469,26 @@ class MangaService: NSObject, ObservableObject {
            .replacingOccurrences(of: "&nbsp;", with: " ")
            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+// MARK: - Timeout Helper
+func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw TimeoutError()
+        }
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
+    }
+}
+
+struct TimeoutError: LocalizedError {
+    var errorDescription: String? { "Operation timed out" }
 }
 
 enum ZMangaError: LocalizedError {
