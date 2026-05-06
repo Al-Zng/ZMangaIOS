@@ -15,6 +15,7 @@ struct Manga: Identifiable, Codable, Hashable {
     var chapters: [Chapter]
     var author: String
     var artist: String
+
     var latestChapterNumber: String?
     var lastUpdated: String?
 
@@ -91,7 +92,7 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager (محسّن)
+// MARK: - Download Manager (مع غلاف وحجم)
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
@@ -106,12 +107,11 @@ class DownloadManager: ObservableObject {
         let chapterSlug: String
         let chapterNumber: String
         let mangaTitle: String
-        let mangaCover: String      // غلاف المانجا
+        let mangaCover: String          // ← الغلاف
         let pages: [String]
         let downloadedAt: Date
     }
 
-    // الحجم الإجمالي للملفات المحمّلة
     var downloadedSize: Int64 {
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let downloadsDir = base.appendingPathComponent("downloads")
@@ -229,7 +229,7 @@ class DownloadManager: ObservableObject {
     }
 }
 
-// MARK: - AppStore (مع كاش تفاصيل المانجا)
+// MARK: - AppStore (مع كاش المانجا)
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
@@ -242,7 +242,7 @@ class AppStore: ObservableObject {
     @Published var reloadTrigger = 0
     @Published var cachedLatest: [Manga]?
     @Published var cachedPopular: [Manga]?
-    @Published var mangaCache: [String: Manga] = [:]  // كاش التفاصيل للسرعة
+    @Published var mangaCache: [String: Manga] = [:]
 
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
@@ -302,16 +302,9 @@ class AppStore: ObservableObject {
     }
 
     // MARK: - Manga Detail Cache
-    func cacheManga(_ manga: Manga) {
-        mangaCache[manga.slug] = manga
-        persistMangaCache()
-    }
-    private func persistMangaCache() {
-        UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey)
-    }
-    private func loadMangaCache() {
-        if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d }
-    }
+    func cacheManga(_ manga: Manga) { mangaCache[manga.slug] = manga; persistMangaCache() }
+    private func persistMangaCache() { UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey) }
+    private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
     // MARK: - Cloudflare
     func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
@@ -358,14 +351,19 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (بدون تغيير)
+// MARK: - Cached Async Image
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var loadFailed = false
     @State private var attempt = 0
-    private static let cache = URLCache(memoryCapacity: 80_000_000, diskCapacity: 400_000_000, directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+
+    private static let cache = URLCache(
+        memoryCapacity: 80 * 1024 * 1024,
+        diskCapacity: 400 * 1024 * 1024,
+        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    )
 
     var body: some View {
         Group {
@@ -375,9 +373,17 @@ struct CachedAsyncImage: View {
                     .interpolation(.high)
                     .antialiased(true)
             } else if isLoading && attempt < 3 {
-                Rectangle().fill(Color(white: 0.12)).overlay(ProgressView().tint(ZTheme.accent))
+                Rectangle()
+                    .fill(Color(white: 0.12))
+                    .overlay(ProgressView().tint(ZTheme.accent))
             } else {
-                Rectangle().fill(Color(white: 0.12)).overlay(Image(systemName: "photo").font(.title2).foregroundColor(ZTheme.textTertiary))
+                Rectangle()
+                    .fill(Color(white: 0.12))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundColor(ZTheme.textTertiary)
+                    )
             }
         }
         .task(id: url?.absoluteString) {
@@ -397,6 +403,7 @@ struct CachedAsyncImage: View {
         if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") || urlStr.contains("/favicon") {
             isLoading = false; loadFailed = true; return
         }
+
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
@@ -405,29 +412,49 @@ struct CachedAsyncImage: View {
         config.httpCookieAcceptPolicy = .always
         let session = URLSession(configuration: config)
 
-        let wkCookies: [HTTPCookie] = await withCheckedContinuation { c in
-            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { c.resume(returning: $0) }
+        let wkCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                continuation.resume(returning: cookies)
+            }
         }
-        for cookie in wkCookies { HTTPCookieStorage.shared.setCookie(cookie) }
+
+        for cookie in wkCookies {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+
         let allCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
         let wkFiltered = wkCookies.filter { wk in !allCookies.contains(where: { $0.name == wk.name }) }
-        let cookieHeader = (allCookies + wkFiltered).map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-        let referer = url.absoluteString.contains("lekstorm") ? "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
+        let cookieHeader = (allCookies + wkFiltered)
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
+
+        let referer = url.absoluteString.contains("lekstorm") ?
+            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
         for _ in 0..<3 {
             attempt += 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
-            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-            if !cookieHeader.isEmpty { request.setValue(cookieHeader, forHTTPHeaderField: "Cookie") }
+            request.setValue(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                forHTTPHeaderField: "User-Agent"
+            )
+            if !cookieHeader.isEmpty {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
+                if let httpResp = response as? HTTPURLResponse,
+                   httpResp.statusCode == 200,
+                   let img = UIImage(data: data),
+                   img.size.width > 0 {
                     await MainActor.run { image = img; isLoading = false }
                     return
                 }
-            } catch { try? await Task.sleep(nanoseconds: 500_000_000) }
+            } catch {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
     }
