@@ -92,7 +92,7 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager (مع غلاف وحجم)
+// MARK: - Download Manager
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
@@ -107,7 +107,7 @@ class DownloadManager: ObservableObject {
         let chapterSlug: String
         let chapterNumber: String
         let mangaTitle: String
-        let mangaCover: String          // ← الغلاف
+        let mangaCover: String
         let pages: [String]
         let downloadedAt: Date
     }
@@ -121,11 +121,9 @@ class DownloadManager: ObservableObject {
     func isDownloaded(mangaSlug: String, chapterSlug: String) -> Bool {
         downloads["\(mangaSlug)_\(chapterSlug)"] != nil
     }
-
     func isDownloading(mangaSlug: String, chapterSlug: String) -> Bool {
         activeDownloads["\(mangaSlug)_\(chapterSlug)"] != nil
     }
-
     func progress(mangaSlug: String, chapterSlug: String) -> Double {
         activeDownloads["\(mangaSlug)_\(chapterSlug)"] ?? 0
     }
@@ -135,25 +133,12 @@ class DownloadManager: ObservableObject {
         let key = "\(manga.slug)_\(chapter.slug)"
         guard !isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
               !isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) else { return }
-
         activeDownloads[key] = 0.0
         let dir = getChapterDir(mangaSlug: manga.slug, chapterSlug: chapter.slug)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-
-        let urls: [String]
-        if let pages = pages {
-            urls = pages
-        } else {
-            guard let fetched = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else {
-                activeDownloads.removeValue(forKey: key)
-                return
-            }
-            urls = fetched
-        }
-
         var localPaths: [String] = []
         let session = URLSession.shared
-        for (idx, urlStr) in urls.enumerated() {
+        for (idx, urlStr) in pages.enumerated() {
             guard let url = URL(string: urlStr) else { continue }
             do {
                 let (data, _) = try await session.data(from: url)
@@ -161,19 +146,14 @@ class DownloadManager: ObservableObject {
                 try data.write(to: filePath)
                 localPaths.append(filePath.path)
             } catch {
-                localPaths.append(urlStr) // fallback
+                localPaths.append(urlStr)
             }
-            activeDownloads[key] = Double(idx + 1) / Double(urls.count)
+            activeDownloads[key] = Double(idx + 1) / Double(pages.count)
         }
-
         let downloaded = DownloadedChapter(
-            mangaSlug: manga.slug,
-            chapterSlug: chapter.slug,
-            chapterNumber: chapter.number,
-            mangaTitle: manga.title,
-            mangaCover: manga.coverURL,
-            pages: localPaths,
-            downloadedAt: Date()
+            mangaSlug: manga.slug, chapterSlug: chapter.slug,
+            chapterNumber: chapter.number, mangaTitle: manga.title,
+            mangaCover: manga.coverURL, pages: localPaths, downloadedAt: Date()
         )
         downloads[key] = downloaded
         activeDownloads.removeValue(forKey: key)
@@ -229,7 +209,7 @@ class DownloadManager: ObservableObject {
     }
 }
 
-// MARK: - AppStore (مع كاش المانجا)
+// MARK: - AppStore
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
@@ -261,7 +241,6 @@ class AppStore: ObservableObject {
         loadMangaCache()
     }
 
-    // MARK: - History
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
         history.insert(progress, at: 0)
@@ -272,28 +251,24 @@ class AppStore: ObservableObject {
     private func persistHistory() { UserDefaults.standard.set(try? JSONEncoder().encode(history), forKey: historyKey) }
     private func loadHistory() { if let data = UserDefaults.standard.data(forKey: historyKey), let d = try? JSONDecoder().decode([ReadingProgress].self, from: data) { history = d } }
 
-    // MARK: - Favorites
     func addToLibrary(_ manga: Manga) { guard !library.contains(where: { $0.slug == manga.slug }) else { return }; library.insert(manga, at: 0); persistLibrary() }
     func removeFromLibrary(_ manga: Manga) { library.removeAll { $0.slug == manga.slug }; persistLibrary() }
     func isInLibrary(_ manga: Manga) -> Bool { library.contains { $0.slug == manga.slug } }
     private func persistLibrary() { UserDefaults.standard.set(try? JSONEncoder().encode(library), forKey: libraryKey) }
     private func loadLibrary() { if let data = UserDefaults.standard.data(forKey: libraryKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { library = d } }
 
-    // MARK: - Want to Read
     func addWantToRead(_ manga: Manga) { guard !wantToRead.contains(where: { $0.slug == manga.slug }) else { return }; wantToRead.insert(manga, at: 0); persistWantToRead() }
     func removeWantToRead(_ manga: Manga) { wantToRead.removeAll { $0.slug == manga.slug }; persistWantToRead() }
     func isWantToRead(_ manga: Manga) -> Bool { wantToRead.contains { $0.slug == manga.slug } }
     private func persistWantToRead() { UserDefaults.standard.set(try? JSONEncoder().encode(wantToRead), forKey: wantToReadKey) }
     private func loadWantToRead() { if let data = UserDefaults.standard.data(forKey: wantToReadKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { wantToRead = d } }
 
-    // MARK: - Completed
     func addCompleted(_ manga: Manga) { guard !completed.contains(where: { $0.slug == manga.slug }) else { return }; completed.insert(manga, at: 0); persistCompleted() }
     func removeCompleted(_ manga: Manga) { completed.removeAll { $0.slug == manga.slug }; persistCompleted() }
     func isCompleted(_ manga: Manga) -> Bool { completed.contains { $0.slug == manga.slug } }
     private func persistCompleted() { UserDefaults.standard.set(try? JSONEncoder().encode(completed), forKey: completedKey) }
     private func loadCompleted() { if let data = UserDefaults.standard.data(forKey: completedKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { completed = d } }
 
-    // MARK: - Home Caching
     func saveCachedLatest(_ items: [Manga]) { cachedLatest = items; UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: cachedLatestKey) }
     func saveCachedPopular(_ items: [Manga]) { cachedPopular = items; UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: cachedPopularKey) }
     private func loadCached() {
@@ -301,13 +276,15 @@ class AppStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: cachedPopularKey), let d = try? JSONDecoder().decode([Manga].self, from: data) { cachedPopular = d }
     }
 
-    // MARK: - Manga Detail Cache
     func cacheManga(_ manga: Manga) { mangaCache[manga.slug] = manga; persistMangaCache() }
     private func persistMangaCache() { UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey) }
     private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
-    // MARK: - Cloudflare
-    func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
+    func triggerCloudflare(url: URL) {
+        Logger.shared.log("Cloudflare triggered for URL: \(url.absoluteString)", category: "Cloudflare")
+        cloudflareURL = url
+        showCloudflareSheet = true
+    }
     func triggerReload() { reloadTrigger += 1 }
 }
 
@@ -351,7 +328,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image
+// MARK: - Cached Async Image (مع Logger)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -428,11 +405,10 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        let referer = url.absoluteString.contains("lekstorm") ?
-            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
+        let referer = "https://lekmanga.site/"
 
-        for _ in 0..<3 {
-            attempt += 1
+        for i in 0..<3 {
+            attempt = i + 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
@@ -445,15 +421,19 @@ struct CachedAsyncImage: View {
             }
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse,
-                   httpResp.statusCode == 200,
-                   let img = UIImage(data: data),
-                   img.size.width > 0 {
-                    await MainActor.run { image = img; isLoading = false }
-                    return
+                if let httpResp = response as? HTTPURLResponse {
+                    if httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
+                        await MainActor.run { image = img; isLoading = false }
+                        return
+                    } else if httpResp.statusCode == 403 {
+                        Logger.shared.log("Image 403: \(url.absoluteString)", category: "ImageLoader")
+                    }
                 }
             } catch {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                Logger.shared.log("Image load error: \(error.localizedDescription) URL: \(url.absoluteString)", category: "ImageLoader")
+            }
+            if i < 2 {
+                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * Double(i + 1)))
             }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
