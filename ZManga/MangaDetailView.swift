@@ -37,8 +37,9 @@ struct MangaDetailView: View {
         .toolbarBackground(ZTheme.surface, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
-            if let manga = manga {
-                ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if let manga = manga {
+                    // Library buttons
                     Button {
                         if store.isInLibrary(manga) {
                             store.removeFromLibrary(manga)
@@ -49,13 +50,38 @@ struct MangaDetailView: View {
                         Image(systemName: store.isInLibrary(manga) ? "heart.fill" : "heart")
                             .foregroundColor(store.isInLibrary(manga) ? ZTheme.accent : ZTheme.textSecondary)
                     }
+                    Menu {
+                        Button {
+                            if store.isWantToRead(manga) {
+                                store.removeWantToRead(manga)
+                            } else {
+                                store.addWantToRead(manga)
+                            }
+                        } label: {
+                            Label(store.isWantToRead(manga) ? "Remove from Want to Read" : "Add to Want to Read",
+                                  systemImage: store.isWantToRead(manga) ? "bookmark.fill" : "bookmark")
+                        }
+                        Button {
+                            if store.isCompleted(manga) {
+                                store.removeCompleted(manga)
+                            } else {
+                                store.addCompleted(manga)
+                            }
+                        } label: {
+                            Label(store.isCompleted(manga) ? "Mark as Uncompleted" : "Mark as Completed",
+                                  systemImage: store.isCompleted(manga) ? "checkmark.circle.fill" : "checkmark.circle")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundColor(ZTheme.textSecondary)
+                    }
                 }
             }
         }
-        // FIX: نفصل الـ sheet عن الـ state بحيث لا يُعرض إلا إذا selectedChapter موجود فعلاً
         .fullScreenCover(item: $selectedChapter) { chapter in
             if let manga = manga {
-                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters)
+                let progress = store.history.first(where: { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug })
+                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters, initialPage: progress?.pageIndex ?? 0)
                     .environmentObject(store)
             } else {
                 ZStack {
@@ -86,7 +112,6 @@ struct MangaDetailView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(ZTheme.card)
                     .frame(width: 110, height: 155)
-
                 VStack(alignment: .leading, spacing: 8) {
                     Text(preloadTitle.isEmpty ? "Loading..." : preloadTitle)
                         .font(.system(size: 18, weight: .bold))
@@ -120,34 +145,50 @@ struct MangaDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 heroSection(manga: manga)
-
                 Divider().background(ZTheme.border).padding(.vertical, 20)
-
                 if !manga.description.isEmpty {
                     descriptionSection(manga.description)
                     Divider().background(ZTheme.border).padding(.vertical, 16)
                 }
-
                 chaptersHeader(count: manga.chapters.count)
-
                 LazyVStack(spacing: 0) {
                     ForEach(sortedChapters) { chapter in
-                        ChapterRow(
-                            chapter: chapter,
-                            manga: manga,
-                            progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug }
-                        ) {
-                            // FIX: مباشرة نعيّن الفصل - Identifiable يفتح الـ sheet
-                            guard !manga.chapters.isEmpty else {
-                                showChapterError = true
-                                return
-                            }
-                            selectedChapter = chapter
-                        }
+                        ChapterRow(chapter: chapter, manga: manga,
+                                   progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug },
+                                   isDownloaded: DownloadManager.shared.isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
+                                   isDownloading: DownloadManager.shared.isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug),
+                                   action: {
+                                       guard !manga.chapters.isEmpty else {
+                                           showChapterError = true
+                                           return
+                                       }
+                                       selectedChapter = chapter
+                                   },
+                                   downloadAction: {
+                                       Task {
+                                           let pages = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                                           if let pages = pages {
+                                               await DownloadManager.shared.downloadChapter(manga: manga, chapter: chapter, pages: pages)
+                                           }
+                                       }
+                                   },
+                                   deleteDownloadAction: {
+                                       DownloadManager.shared.deleteChapter(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                                   },
+                                   markReadAction: { isRead in
+                                       if isRead {
+                                           let progress = ReadingProgress(mangaSlug: manga.slug, mangaTitle: manga.title,
+                                                                        mangaCover: manga.coverURL, chapterSlug: chapter.slug,
+                                                                        chapterNumber: chapter.number, pageIndex: 0)
+                                           store.saveProgress(progress)
+                                       } else {
+                                           store.history.removeAll { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug }
+                                       }
+                                   }
+                        )
                         Divider().background(ZTheme.border).padding(.leading, 16)
                     }
                 }
-
                 Color.clear.frame(height: 40)
             }
         }
@@ -202,7 +243,7 @@ struct MangaDetailView: View {
                     }
                 }
 
-                // FIX: زر البداية/الاستمرار - يعيّن selectedChapter مباشرة
+                // زر Start/Continue مع الصفحة
                 if let firstChapter = manga.chapters.min(by: { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }) {
                     Button {
                         guard !manga.chapters.isEmpty else {
@@ -219,7 +260,7 @@ struct MangaDetailView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 11))
-                            Text(store.history.first(where: { $0.mangaSlug == manga.slug }) != nil ? "Continue" : "Start Reading")
+                            Text(store.history.first(where: { $0.mangaSlug == manga.slug }) != nil ? "Continue Ch.\(store.history.first(where: { $0.mangaSlug == manga.slug })!.chapterNumber)" : "Start Reading")
                                 .font(.system(size: 13, weight: .semibold))
                         }
                         .foregroundColor(ZTheme.bg)
@@ -247,7 +288,6 @@ struct MangaDetailView: View {
                 .foregroundColor(ZTheme.textSecondary)
                 .tracking(2)
                 .padding(.horizontal, 20)
-
             Text(text)
                 .font(.system(size: 14))
                 .foregroundColor(ZTheme.textSecondary)
@@ -266,9 +306,7 @@ struct MangaDetailView: View {
             Spacer()
 
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    chapterSortAsc.toggle()
-                }
+                withAnimation(.easeInOut(duration: 0.2)) { chapterSortAsc.toggle() }
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: chapterSortAsc ? "arrow.up" : "arrow.down")
@@ -303,12 +341,17 @@ struct MangaDetailView: View {
     }
 }
 
-// MARK: - Chapter Row
+// MARK: - Chapter Row with Context Menu
 struct ChapterRow: View {
     let chapter: Chapter
     let manga: Manga
     let progress: ReadingProgress?
+    let isDownloaded: Bool
+    let isDownloading: Bool
     let action: () -> Void
+    let downloadAction: () -> Void
+    let deleteDownloadAction: () -> Void
+    let markReadAction: (Bool) -> Void
 
     var isRead: Bool { progress != nil }
 
@@ -325,6 +368,15 @@ struct ChapterRow: View {
                             Text("· p.\(p.pageIndex + 1)")
                                 .font(.system(size: 12))
                                 .foregroundColor(ZTheme.accent)
+                        }
+                        if isDownloaded {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(ZTheme.success)
+                                .font(.system(size: 12))
+                        } else if isDownloading {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(ZTheme.accent)
                         }
                     }
 
@@ -345,19 +397,38 @@ struct ChapterRow: View {
             .padding(.vertical, 14)
             .background(ZTheme.bg)
         }
+        .contextMenu {
+            Button {
+                markReadAction(!isRead)
+            } label: {
+                Label(isRead ? "Mark as Unread" : "Mark as Read",
+                      systemImage: isRead ? "eye.slash" : "eye")
+            }
+
+            if isDownloaded {
+                Button(role: .destructive, action: deleteDownloadAction) {
+                    Label("Delete Download", systemImage: "trash")
+                }
+            } else if !isDownloading {
+                Button(action: downloadAction) {
+                    Label("Download Chapter", systemImage: "arrow.down.circle")
+                }
+            } else {
+                Label("Downloading...", systemImage: "hourglass")
+                    .disabled(true)
+            }
+        }
     }
 }
 
 // MARK: - Status Badge
 struct StatusBadge: View {
     let text: String
-
     var color: Color {
         text.lowercased().contains("مستمر") || text.lowercased().contains("ongoing")
             ? Color(hex: "#4CAF82")
             : ZTheme.textTertiary
     }
-
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .semibold))
@@ -372,7 +443,6 @@ struct StatusBadge: View {
 // MARK: - FlowLayout
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
-
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? 0
         var height: CGFloat = 0
