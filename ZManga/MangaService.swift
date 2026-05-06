@@ -83,13 +83,51 @@ class MangaService: NSObject, ObservableObject {
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
-        let html = try await fetchHTML(urlString: url)
-        return parseChapterPages(html: html)
+        _ = try await fetchHTML(urlString: url)
+
+        // انتظار ذكي حتى تظهر الصور الحقيقية في الـ DOM
+        try await waitForImages()
+
+        let webView = getWebView()
+        let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                if let html = result as? String {
+                    continuation.resume(returning: html)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        return parseChapterPages(html: updatedHTML)
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
         let html = try await fetchHTML(urlString: "\(baseURL)/manga-genre/\(genre)/?page=\(page)")
         return parseMangaList(html: html, extractChapterInfo: false)
+    }
+
+    // MARK: - Smart Wait for Lazy Images
+
+    private func waitForImages() async throws {
+        let waitJS = """
+        new Promise((resolve) => {
+            const check = () => {
+                const imgs = document.querySelectorAll('.reading-content img');
+                const hasRealSrc = Array.from(imgs).some(img => {
+                    const src = img.dataset.src || img.dataset.lazySrc || img.src || '';
+                    return src.startsWith('http') && !src.includes('data:image');
+                });
+                if (hasRealSrc || imgs.length === 0) resolve();
+                else setTimeout(check, 200);
+            };
+            setTimeout(check, 300);
+            setTimeout(resolve, 4000); // timeout أقصى
+        });
+        """
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            getWebView().evaluateJavaScript(waitJS) { _, _ in continuation.resume() }
+        }
     }
 
     // MARK: - Parse Manga List
@@ -162,7 +200,7 @@ class MangaService: NSObject, ObservableObject {
                 time?.trimmingCharacters(in: .whitespaces))
     }
 
-    // MARK: - Parse Manga Detail (تم إصلاح slug باستخدام pathComponents)
+    // MARK: - Parse Manga Detail (باستخدام pathComponents)
 
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
@@ -188,7 +226,6 @@ class MangaService: NSObject, ObservableObject {
             genres.append(ns.substring(with: m.range(at: 1)))
         }
 
-        // إصلاح استخراج slug الفصل باستخدام pathComponents
         var chapters: [Chapter] = []
         let chapterBlockPattern = #"<li class="wp-manga-chapter[^"]*">(.*?)</li>"#
         if let blockRegex = try? NSRegularExpression(pattern: chapterBlockPattern, options: [.dotMatchesLineSeparators]) {
@@ -227,20 +264,20 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (إصلاح reading-content + الصور)
+    // MARK: - Parse Chapter Pages (يدعم data-lazy-src + استخراج محتوى reading-content)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
 
-        // استخراج محتوى reading-content كاملاً باستخدام range(of:) للتغلب على مشكلة .*?
         let content = extractReadingContent(html: html)
 
         let patterns: [(String, NSRegularExpression.Options)] = [
+            (#"<img[^>]+data-lazy-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
             (#"<img[^>]+data-src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
             (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*data-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
             (#"<img[^>]+src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
             (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+            (#"<img[^>]+(?:data-src|data-lazy-src|src)="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
         ]
 
         for (pattern, options) in patterns {
@@ -259,7 +296,6 @@ class MangaService: NSObject, ObservableObject {
         return pages
     }
 
-    // استخراج محتوى <div class="reading-content"> كاملاً
     private func extractReadingContent(html: String) -> String {
         let startPattern = #"<div[^>]+class="[^"]*reading-content[^"]*"[^>]*>"#
         let endTag = "</div>"
@@ -272,7 +308,6 @@ class MangaService: NSObject, ObservableObject {
         let startIndex = startMatch.range.location + startMatch.range.length
         let remaining = (html as NSString).substring(from: startIndex)
 
-        // البحث عن </div> الختامية للمحتوى مع توازن الأقواس
         var depth = 1
         var currentIndex = 0
         let nsRemaining = remaining as NSString
@@ -315,10 +350,17 @@ class MangaService: NSObject, ObservableObject {
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
         for tag in tags {
+            // data-lazy-src أولاً
+            if let dataLazy = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag) {
+                let url = dataLazy.trimmingCharacters(in: .whitespacesAndNewlines)
+                if url.hasPrefix("http") { return url }
+            }
+            // data-src
             if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
+            // src
             if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") && !isLogoOnly(url) { return url }
