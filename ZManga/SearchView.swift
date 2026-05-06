@@ -116,7 +116,7 @@ struct SearchView: View {
                 ForEach(Array(results.enumerated()), id: \.offset) { index, manga in
                     NavigationLink(destination: MangaDetailView(slug: manga.slug, preloadTitle: manga.title, preloadCover: manga.coverURL)) {
                         SearchGridCard(manga: manga)
-                            .id("\(manga.slug)-\(index)")
+                            .id("search-\(manga.slug)-\(index)")
                     }
                     .buttonStyle(PlainButtonStyle())
                     .onAppear {
