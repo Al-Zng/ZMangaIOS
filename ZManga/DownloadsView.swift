@@ -10,12 +10,15 @@ struct DownloadsView: View {
                 ZTheme.bg.ignoresSafeArea()
                 if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
                     VStack(spacing: 12) {
-                        Image(systemName: "arrow.down.circle").font(.system(size: 48, weight: .ultraLight)).foregroundColor(ZTheme.textTertiary)
-                        Text("No downloads yet").font(.system(size: 15)).foregroundColor(ZTheme.textSecondary)
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundColor(ZTheme.textTertiary)
+                        Text("No downloads yet")
+                            .font(.system(size: 15))
+                            .foregroundColor(ZTheme.textSecondary)
                     }
                 } else {
                     List {
-                        // التحميلات الجارية
                         if !dm.activeDownloads.isEmpty {
                             Section("Downloading") {
                                 ForEach(Array(dm.activeDownloads.keys), id: \.self) { key in
@@ -25,7 +28,6 @@ struct DownloadsView: View {
                                 }
                             }
                         }
-                        // التحميلات المكتملة
                         Section("Completed") {
                             ForEach(Array(dm.downloads.values)) { chapter in
                                 DownloadCompleteRow(chapter: chapter)
@@ -41,29 +43,31 @@ struct DownloadsView: View {
                     .listStyle(.insetGrouped)
                     .background(ZTheme.bg)
                     .scrollContentBackground(.hidden)
+                    .toolbar {
+                        if !dm.downloads.isEmpty {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Clear All") { dm.removeAllDownloads() }
+                                    .foregroundColor(ZTheme.danger)
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !dm.downloads.isEmpty {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Clear All") { dm.removeAllDownloads() }
-                            .foregroundColor(ZTheme.danger)
-                    }
-                }
-            }
         }
     }
 }
 
 extension DownloadManager {
-    // بيانات مؤقتة للتحميل النشط عندما لا تكون محفوظة بعد
     func activeChapterMeta(_ key: String) -> DownloadedChapter? {
-        // إذا لم نستطع استرجاع كامل الميتا، نعرض بيانات افتراضية
         let parts = key.components(separatedBy: "_")
         guard parts.count == 2 else { return nil }
-        return DownloadedChapter(mangaSlug: parts[0], chapterSlug: parts[1], chapterNumber: "?", mangaTitle: "Loading...", mangaCover: "", pages: [], downloadedAt: Date())
+        return DownloadedChapter(
+            mangaSlug: parts[0], chapterSlug: parts[1],
+            chapterNumber: "?", mangaTitle: "Loading...",
+            mangaCover: "", pages: [], downloadedAt: Date()
+        )
     }
 }
 
@@ -82,12 +86,19 @@ struct DownloadingRow: View {
                 RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(chapter.mangaTitle).font(.system(size: 14, weight: .semibold)).foregroundColor(ZTheme.textPrimary).lineLimit(1)
-                Text("Chapter \(chapter.chapterNumber)").font(.system(size: 12)).foregroundColor(ZTheme.accent)
+                Text(chapter.mangaTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(ZTheme.textPrimary)
+                    .lineLimit(1)
+                Text("Chapter \(chapter.chapterNumber)")
+                    .font(.system(size: 12))
+                    .foregroundColor(ZTheme.accent)
                 ProgressView(value: progress)
                     .tint(ZTheme.accent)
                     .scaleEffect(x: 1, y: 2, anchor: .center)
-                Text("\(Int(progress * 100))%").font(.system(size: 11)).foregroundColor(ZTheme.textTertiary)
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: 11))
+                    .foregroundColor(ZTheme.textTertiary)
             }
         }
         .padding(.vertical, 4)
@@ -108,10 +119,16 @@ struct DownloadCompleteRow: View {
                     RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(chapter.mangaTitle).font(.system(size: 14, weight: .semibold)).foregroundColor(ZTheme.textPrimary).lineLimit(1)
-                    Text("Chapter \(chapter.chapterNumber)").font(.system(size: 12)).foregroundColor(ZTheme.textSecondary)
+                    Text(chapter.mangaTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(ZTheme.textPrimary)
+                        .lineLimit(1)
+                    Text("Chapter \(chapter.chapterNumber)")
+                        .font(.system(size: 12))
+                        .foregroundColor(ZTheme.textSecondary)
                     Text("Downloaded \(chapter.downloadedAt.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.system(size: 11)).foregroundColor(ZTheme.textTertiary)
+                        .font(.system(size: 11))
+                        .foregroundColor(ZTheme.textTertiary)
                 }
             }
         }
