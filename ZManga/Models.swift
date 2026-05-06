@@ -253,14 +253,14 @@ class AppStore: ObservableObject {
     private let mangaCacheKey = "zmanga_manga_cache"
 
     init() {
-    AppStore.currentStore = self   // ← هذا السطر المفقود
-    loadHistory()
-    loadLibrary()
-    loadWantToRead()
-    loadCompleted()
-    loadCached()
-    loadMangaCache()
-}
+        loadHistory()
+        loadLibrary()
+        loadWantToRead()
+        loadCompleted()
+        loadCached()
+        loadMangaCache()
+    }
+
     // MARK: - History
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
@@ -428,18 +428,11 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        // تحديد الـ Referer بناءً على النطاق الفرعي للصور
-        let urlHost = url.host ?? ""
-        let referer: String
-        if urlHost.contains("lekmanga.site") {
-            referer = "https://lekmanga.site/"
-        } else {
-            // لضمان عمل الصور من سيرفرات مختلفة
-            referer = "https://lekmanga.site/"
-        }
+        let referer = url.absoluteString.contains("lekstorm") ?
+            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
-        for i in 0..<3 {
-            attempt = i + 1
+        for _ in 0..<3 {
+            attempt += 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
@@ -447,29 +440,20 @@ struct CachedAsyncImage: View {
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
                 forHTTPHeaderField: "User-Agent"
             )
-            
-            // إضافة الكوكيز للطلب إذا كانت متوفرة
             if !cookieHeader.isEmpty {
                 request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
             }
-            
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse {
-                    if httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
-                        await MainActor.run { image = img; isLoading = false }
-                        return
-                    } else if httpResp.statusCode == 403 {
-                        // محاولة تغيير الـ Referer في المحاولة القادمة إذا فشل بـ 403
-                        print("Image 403 for: \(url.absoluteString)")
-                    }
+                if let httpResp = response as? HTTPURLResponse,
+                   httpResp.statusCode == 200,
+                   let img = UIImage(data: data),
+                   img.size.width > 0 {
+                    await MainActor.run { image = img; isLoading = false }
+                    return
                 }
             } catch {
-                print("Image load error: \(error.localizedDescription)")
-            }
-            
-            if i < 2 {
-                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * Double(i + 1)))
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
