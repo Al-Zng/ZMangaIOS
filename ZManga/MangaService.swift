@@ -83,22 +83,45 @@ class MangaService: NSObject, ObservableObject {
 
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
+
+        // 1. تحميل الصفحة أولاً للحصول على chapter_id
         let html = try await fetchHTML(urlString: url)
 
-        // 1. استخراج chapter_id من الـ hidden input
+        // 2. محاولة AJAX أولاً (الأسرع والأموثق)
         if let chapterId = firstCapture(
             pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
             in: html
         ) {
-            // جلب الصور مباشرة عبر AJAX
             if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
                 return pages
             }
         }
 
-        // 2. إذا فشل، انتظر WebView ثم parse
-        try await waitForImages()
+        // 3. الـ WebView محمّل بالفعل — الآن ننتظر حتى يُحقن lazy loading الصور في DOM
         let webView = getWebView()
+        let waitJS = """
+        new Promise((resolve) => {
+            let attempts = 0;
+            const check = () => {
+                attempts++;
+                const imgs = document.querySelectorAll('.reading-content img');
+                const hasRealSrc = Array.from(imgs).some(img => {
+                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
+                    return src.startsWith('http') && !src.includes('data:image');
+                });
+                if (hasRealSrc || attempts >= 30) resolve(attempts);
+                else setTimeout(check, 300);
+            };
+            // أعط الـ JS وقتاً ليبدأ
+            setTimeout(check, 800);
+        });
+        """
+
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
+        }
+
+        // 4. الآن اجلب الـ HTML بعد أن عمل الـ lazy loading
         let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -108,7 +131,9 @@ class MangaService: NSObject, ObservableObject {
                 }
             }
         }
-        return parseChapterPages(html: updatedHTML)
+
+        let pages = parseChapterPages(html: updatedHTML)
+        return pages
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -160,31 +185,7 @@ class MangaService: NSObject, ObservableObject {
         return []
     }
 
-    // MARK: - Smart Wait for Lazy Images (مُصلح: لا ينتهي إذا لم توجد صور بعد)
 
-    private func waitForImages() async throws {
-        let waitJS = """
-        new Promise((resolve) => {
-            let attempts = 0;
-            const check = () => {
-                attempts++;
-                const imgs = document.querySelectorAll('.reading-content img');
-                const hasRealSrc = Array.from(imgs).some(img => {
-                    const src = img.dataset.lazySrc || img.dataset.src || img.src || '';
-                    return src.startsWith('http') && !src.includes('data:image');
-                });
-                // نحتاج صور حقيقية؛ لا نحلّ إذا كانت الصور فارغة
-                if (hasRealSrc) resolve();
-                else if (attempts < 20) setTimeout(check, 300);
-                else resolve(); // timeout بعد 6 ثواني
-            };
-            setTimeout(check, 500);
-        });
-        """
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            getWebView().evaluateJavaScript(waitJS) { _, _ in continuation.resume() }
-        }
-    }
 
     // MARK: - Parse Manga List
 
