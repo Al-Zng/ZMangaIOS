@@ -85,11 +85,18 @@ class MangaService: NSObject, ObservableObject {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
         _ = try await fetchHTML(urlString: url)
 
-        // انتظار 7 ثواني حتى يتم تحميل الصور البطيئة
+        // حقن JavaScript لتحميل الصور البطيئة فوراً
+        let webView = getWebView()
+        try? await webView.evaluateJavaScript("""
+            document.querySelectorAll('img[data-src]').forEach(function(img) {
+                img.src = img.getAttribute('data-src');
+            });
+        """)
+
+        // انتظار 7 ثواني لتكتمل عملية التحميل
         try await Task.sleep(nanoseconds: 7_000_000_000)
 
-        // استخراج HTML محدث بعد تحميل الصور
-        let webView = getWebView()
+        // استخراج HTML محدث
         let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -108,11 +115,11 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - Parse Manga List
+    // MARK: - Parse Manga List (مبني على PDF الجديد: div.page-item-detail.manga)
 
     private func parseMangaList(html: String, extractChapterInfo: Bool) -> [Manga] {
         var results: [Manga] = []
-        let cardPattern = #"<div class="page-item-detail[^"]*">(.*?)</div>\s*</div>\s*</div>"#
+        let cardPattern = #"<div class="page-item-detail[^"]*manga[^"]*">(.*?)</div>\s*</div>\s*</div>"#
         guard let cardRegex = try? NSRegularExpression(pattern: cardPattern, options: [.dotMatchesLineSeparators]) else { return results }
         let nsHtml = html as NSString
         for match in cardRegex.matches(in: html, range: NSRange(location: 0, length: nsHtml.length)).prefix(30) {
@@ -137,15 +144,21 @@ class MangaService: NSObject, ObservableObject {
     }
 
     private func parseMangaCard(_ block: String) -> Manga? {
+        // PDF: العنوان داخل h3.h5 a
         guard let slug = firstCapture(pattern: #"href="https?://[^/]+/manga/([^/"]+)/""#, in: block), !slug.isEmpty else { return nil }
-        let title = firstCapture(pattern: #"<(?:h3|h4)[^>]*>\s*<a[^>]*>([^<]+)</a>"#, in: block) ?? slug.replacingOccurrences(of: "-", with: " ").capitalized
-        let cover = firstCapture(pattern: #"<img[^>]+data-src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: block)
-                 ?? firstCapture(pattern: #"<img[^>]+src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: block) ?? ""
+        let title = firstCapture(pattern: #"<h3[^>]*>\s*<a[^>]*>([^<]+)</a>"#, in: block)
+                 ?? firstCapture(pattern: #"<h5[^>]*>\s*<a[^>]*>([^<]+)</a>"#, in: block)
+                 ?? slug.replacingOccurrences(of: "-", with: " ").capitalized
+        // PDF: الصورة img.img-responsive مع data-src
+        let cover = firstCapture(pattern: #"<img[^>]+class="[^"]*img-responsive[^"]*"[^>]+data-src="([^"]+)"[^>]*>"#, in: block)
+                 ?? firstCapture(pattern: #"<img[^>]+class="[^"]*img-responsive[^"]*"[^>]+src="([^"]+)"[^>]*>"#, in: block)
+                 ?? ""
         if slug.isEmpty || slug == "feed" || isLogoOnly(cover) { return nil }
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
 
     private func parseMangaSimple(html: String, extractChapterInfo: Bool) -> [Manga] {
+        // fallback: أي رابط manga/.../
         var results: [Manga] = []
         let pattern = #"href="(https?://[^/]+/manga/([^/"]+)/)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,})"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return results }
@@ -176,7 +189,7 @@ class MangaService: NSObject, ObservableObject {
                 time?.trimmingCharacters(in: .whitespaces))
     }
 
-    // MARK: - Parse Manga Detail
+    // MARK: - Parse Manga Detail (مبني على PDF: div.post-title h1, div.summary_image img, li.wp-manga-chapter)
 
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
@@ -201,16 +214,18 @@ class MangaService: NSObject, ObservableObject {
         }
 
         var chapters: [Chapter] = []
+        // PDF: الفصول داخل li.wp-manga-chapter مع span.chapter-release-date
         let chapterBlockPattern = #"<li class="wp-manga-chapter[^"]*">(.*?)</li>"#
         if let blockRegex = try? NSRegularExpression(pattern: chapterBlockPattern, options: [.dotMatchesLineSeparators]) {
             blockRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
                 let block = ns.substring(with: match.range(at: 1))
-                if let fullUrl = firstCapture(pattern: #"href="(https?://[^/]+/manga/[^/]+/([^/"]+)/)""#, in: block) {
-                    let slugPart = URL(string: fullUrl)?.lastPathComponent ?? fullUrl
+                if let link = firstCapture(pattern: #"href="(https?://[^/]+/manga/[^/]+/([^/"]+)/)""#, in: block) {
+                    let slugPart = URL(string: link)?.lastPathComponent ?? link
                     let numberPart = firstCapture(pattern: #">(\d+)</a>"#, in: block) ?? slugPart
+                    let date = firstCapture(pattern: #"class="chapter-release-date"[^>]*>\s*(?:<[^>]+>)?([^<]+)<"#, in: block)
                     if !chapters.contains(where: { $0.slug == slugPart }) {
-                        chapters.append(Chapter(slug: slugPart, number: numberPart))
+                        chapters.append(Chapter(slug: slugPart, number: numberPart, date: date?.trimmingCharacters(in: .whitespaces) ?? ""))
                     }
                 }
             }
@@ -234,62 +249,42 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (داخل reading-content، مع انتظار lazy loading)
+    // MARK: - Parse Chapter Pages (PDF: div.reading-content > div.page-break > img.wp-manga-chapter-img)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // استخراج المحتوى داخل reading-content أولاً
-        var containerContent = ""
+        // استخراج الصور من داخل reading-content
         let containerPattern = #"<div[^>]+class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>\s*(?:<(?:div|script|style))"#
+        var content = ""
         if let containerRegex = try? NSRegularExpression(pattern: containerPattern,
                                                          options: [.dotMatchesLineSeparators, .caseInsensitive]) {
             containerRegex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
-                containerContent += ns.substring(with: match.range(at: 1))
+                content += ns.substring(with: match.range(at: 1))
             }
         }
-
-        let target = containerContent.isEmpty ? html : containerContent
+        let target = content.isEmpty ? html : content
         let targetNS = target as NSString
 
-        // استخراج كل الصور مع تفضيل data-src
-        let imgPattern = #"<img[^>]+(?:data-src|src)\s*=\s*"([^"]+)"[^>]*>"#
-        guard let imgRegex = try? NSRegularExpression(pattern: imgPattern,
-                                                      options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
-            return pages
-        }
-
-        var foundURLs = Set<String>()
-        imgRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
-            guard let match = match, match.numberOfRanges >= 2 else { return }
-            let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if isValidChapterImageURL(url) {
-                foundURLs.insert(url)
+        // PDF: img.wp-manga-chapter-img مع data-src
+        let imgPattern = #"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]+data-src="([^"]+)"[^>]*>"#
+        if let imgRegex = try? NSRegularExpression(pattern: imgPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            imgRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
+                guard let match = match, match.numberOfRanges >= 2 else { return }
+                let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if isValidImageURL(url) && !pages.contains(url) { pages.append(url) }
             }
         }
-
-        // ترتيب الظهور
-        imgRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
-            guard let match = match, match.numberOfRanges >= 2 else { return }
-            let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if foundURLs.contains(url) && !pages.contains(url) {
-                pages.append(url)
-            }
-        }
-
-        // إذا لم نجد، نجرب البحث داخل page-break
+        // fallback: src
         if pages.isEmpty {
-            let altPattern = #"<div[^>]+class="[^"]*page-break[^"]*"[^>]*>\s*<img[^>]+data-src="([^"]+)"[^>]*>"#
-            if let altRegex = try? NSRegularExpression(pattern: altPattern,
-                                                       options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-                altRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
+            let srcPattern = #"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]+src="([^"]+)"[^>]*>"#
+            if let srcRegex = try? NSRegularExpression(pattern: srcPattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+                srcRegex.enumerateMatches(in: target, range: NSRange(location: 0, length: targetNS.length)) { match, _, _ in
                     guard let match = match, match.numberOfRanges >= 2 else { return }
                     let url = targetNS.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if isValidChapterImageURL(url) && !pages.contains(url) {
-                        pages.append(url)
-                    }
+                    if isValidImageURL(url) && !pages.contains(url) { pages.append(url) }
                 }
             }
         }
@@ -297,24 +292,11 @@ class MangaService: NSObject, ObservableObject {
         return pages
     }
 
-    private func isValidChapterImageURL(_ url: String) -> Bool {
+    private func isValidImageURL(_ url: String) -> Bool {
         guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
         let lower = url.lowercased()
-        if lower.contains("lekmanga.png") ||
-           lower.contains("-512.png") ||
-           lower.contains("-192x192.png") ||
-           lower.contains("-32x32.png") ||
-           lower.contains("-150x150.png") ||
-           lower.contains("/favicon") ||
-           lower.contains("logo") ||
-           lower.contains("/icon-") ||
-           lower.contains("-1x1") ||
-           lower.contains("blank") ||
-           lower.contains("placeholder") {
-            return false
-        }
-        let validExtensions = [".jpg", ".jpeg", ".png", ".webp"]
-        return validExtensions.contains(where: { lower.hasSuffix($0) || lower.contains($0 + "?") })
+        if lower.contains("lekmanga.png") || lower.contains("-512.png") || lower.contains("/favicon") { return false }
+        return lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") || lower.contains(".webp")
     }
 
     // MARK: - Helpers
