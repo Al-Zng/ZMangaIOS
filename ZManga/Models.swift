@@ -107,7 +107,7 @@ class DownloadManager: ObservableObject {
         let chapterSlug: String
         let chapterNumber: String
         let mangaTitle: String
-        let mangaCover: String          // ← الغلاف
+        let mangaCover: String
         let pages: [String]
         let downloadedAt: Date
     }
@@ -161,7 +161,7 @@ class DownloadManager: ObservableObject {
                 try data.write(to: filePath)
                 localPaths.append(filePath.path)
             } catch {
-                localPaths.append(urlStr) // fallback
+                localPaths.append(urlStr)
             }
             activeDownloads[key] = Double(idx + 1) / Double(urls.count)
         }
@@ -229,15 +229,20 @@ class DownloadManager: ObservableObject {
     }
 }
 
-// MARK: - AppStore (مع كاش المانجا)
+// MARK: - كائن تحدي Cloudflare (يدعم Identifiable للـ sheet)
+struct CloudflareChallenge: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+// MARK: - AppStore (مُعدّل للعمل مع Cloudflare بشكل صحيح)
 class AppStore: ObservableObject {
-    static weak var currentStore: AppStore?
+    static var currentStore: AppStore?                     // <-- تم حذف weak
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
     @Published var completed: [Manga] = []
-    @Published var showCloudflareSheet = false
-    @Published var cloudflareURL: URL?
+    @Published var activeChallenge: CloudflareChallenge? = nil   // <-- جديد
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
     @Published var cachedLatest: [Manga]?
@@ -306,12 +311,14 @@ class AppStore: ObservableObject {
     private func persistMangaCache() { UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey) }
     private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
-    // MARK: - Cloudflare
-    func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
+    // MARK: - Cloudflare (مُعدّلة)
+    func triggerCloudflare(url: URL) {
+        activeChallenge = CloudflareChallenge(url: url)
+    }
     func triggerReload() { reloadTrigger += 1 }
 }
 
-// MARK: - Design Tokens
+// MARK: - Design Tokens (بدون تغيير)
 struct ZTheme {
     static let bg       = Color(hex: "#0D0D0D")
     static let surface  = Color(hex: "#161616")
@@ -351,7 +358,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image
+// MARK: - Cached Async Image (بدون تغيير)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
