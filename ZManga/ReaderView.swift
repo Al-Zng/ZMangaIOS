@@ -8,8 +8,12 @@ struct ReaderView: View {
     let chapter: Chapter
     let allChapters: [Chapter]
     var initialPage: Int = 0
+    var preloadedPages: [String]? = nil
 
     @State private var isLoading = true
+    @State private var loadingProgress: Double = 0          // 0...1
+    @State private var loadedPagesCount = 0
+    @State private var totalPages = 0
     @State private var currentPage = 0
     @State private var showUI = true
     @State private var uiTimer: Timer?
@@ -22,11 +26,12 @@ struct ReaderView: View {
 
     @State private var visiblePage = 0
 
-    init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0) {
+    init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0, preloadedPages: [String]? = nil) {
         self.manga = manga
         self.chapter = chapter
         self.allChapters = allChapters
         self.initialPage = initialPage
+        self.preloadedPages = preloadedPages
         _currentChapterSlug = State(initialValue: chapter.slug)
     }
 
@@ -42,80 +47,34 @@ struct ReaderView: View {
             Color.black.ignoresSafeArea()
 
             if isLoading && allPages.isEmpty {
-                loadingOverlay
+                loadingView
             } else if let err = errorMessage, allPages.isEmpty {
                 errorOverlay(err)
-            } else if allPages.isEmpty && !isLoading {
-                emptyPagesView
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
-                                if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
-                                    ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
-                                        .id("sep_\(idx)")
-                                }
-                                MangaPageImage(url: page.url)
-                                    .id(idx)
-                                    .background(GeometryReader { geo in
-                                        Color.clear.preference(
-                                            key: PageOffsetKey.self,
-                                            value: [idx: geo.frame(in: .named("reader_space")).minY]
-                                        )
-                                    })
-                            }
-                        }
-                        .background(GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: ScrollOffsetKey.self,
-                                value: proxy.frame(in: .named("reader_space")).minY
-                            )
-                        })
-                    }
-                    .coordinateSpace(name: "reader_space")
-                    .onPreferenceChange(PageOffsetKey.self) { offsets in
-                        guard !offsets.isEmpty else { return }
-                        let closest = offsets.min(by: { abs($0.value) < abs($1.value) })
-                        if let closest = closest, closest.key != visiblePage {
-                            visiblePage = closest.key
-                            currentPage = visiblePage
-                            saveProgress(pageIndex: visiblePage)
-                            if visiblePage >= allPages.count - 5 && !loadingNextChapter {
-                                Task { await loadNextChapter() }
-                            }
-                        }
-                    }
-                    .onAppear {
-                        proxy.scrollTo(initialPage, anchor: .top)
-                    }
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
-                        if showUI { resetUITimer() }
-                    }
-                }
+                readerContent
+            }
 
-                VStack {
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundColor(.white)
-                                .frame(width: 34, height: 34)
-                                .background(.black.opacity(0.7))
-                                .clipShape(Circle())
-                                .shadow(color: .black.opacity(0.5), radius: 4)
-                        }
-                        Spacer()
+            // زر الإغلاق
+            VStack {
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 34, height: 34)
+                            .background(.black.opacity(0.7))
+                            .clipShape(Circle())
+                            .shadow(color: .black.opacity(0.5), radius: 4)
                     }
-                    .padding(.top, 56)
-                    .padding(.leading, 16)
                     Spacer()
                 }
-
-                if showUI { topBar }
-                VStack { Spacer(); bottomBar }
+                .padding(.top, 56)
+                .padding(.leading, 16)
+                Spacer()
             }
+
+            if showUI && !allPages.isEmpty { topBar }
+            VStack { Spacer(); bottomBar }
         }
         .ignoresSafeArea(edges: .bottom)
         .statusBarHidden(!showUI)
@@ -123,6 +82,89 @@ struct ReaderView: View {
         .onAppear { resetUITimer() }
     }
 
+    // ---------- المحتوى الرئيسي (بدون loading) ----------
+    var readerContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
+                        if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
+                            ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
+                                .id("sep_\(idx)")
+                        }
+                        MangaPageImage(url: page.url)
+                            .id(idx)
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: PageOffsetKey.self,
+                                    value: [idx: geo.frame(in: .named("reader_space")).minY]
+                                )
+                            })
+                    }
+                }
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: ScrollOffsetKey.self,
+                        value: proxy.frame(in: .named("reader_space")).minY
+                    )
+                })
+            }
+            .coordinateSpace(name: "reader_space")
+            .onPreferenceChange(PageOffsetKey.self) { offsets in
+                guard !offsets.isEmpty else { return }
+                let closest = offsets.min(by: { abs($0.value) < abs($1.value) })
+                if let closest = closest, closest.key != visiblePage {
+                    visiblePage = closest.key
+                    currentPage = visiblePage
+                    saveProgress(pageIndex: visiblePage)
+                    if visiblePage >= allPages.count - 5 && !loadingNextChapter {
+                        Task { await loadNextChapter() }
+                    }
+                }
+            }
+            .onAppear { proxy.scrollTo(initialPage, anchor: .top) }
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
+                if showUI { resetUITimer() }
+            }
+        }
+    }
+
+    // ---------- واجهة التحميل الجديدة (شريط التقدم) ----------
+    var loadingView: some View {
+        VStack(spacing: 30) {
+            Spacer()
+            VStack(spacing: 16) {
+                Image(systemName: "book.pages")
+                    .font(.system(size: 40, weight: .ultraLight))
+                    .foregroundColor(ZTheme.accent)
+
+                if totalPages > 0 {
+                    VStack(spacing: 12) {
+                        ProgressView(value: loadingProgress)
+                            .tint(ZTheme.accent)
+                            .scaleEffect(x: 1, y: 2, anchor: .center)
+                        Text("\(loadedPagesCount) / \(totalPages) pages")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(ZTheme.textSecondary)
+                    }
+                    .padding(.horizontal, 40)
+                } else {
+                    ProgressView()
+                        .tint(ZTheme.accent)
+                        .scaleEffect(1.2)
+                }
+
+                Text("Preparing chapter...")
+                    .font(.system(size: 13))
+                    .foregroundColor(ZTheme.textTertiary)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // ---------- الأجزاء الأخرى (topBar, bottomBar, …) تبقى كما هي إلى حد كبير ----------
     var topBar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -169,13 +211,6 @@ struct ReaderView: View {
         }
     }
 
-    var loadingOverlay: some View {
-        VStack(spacing: 20) {
-            ProgressView().tint(ZTheme.accent).scaleEffect(1.4)
-            Text("Loading chapter...").font(.system(size: 14)).foregroundColor(.white.opacity(0.5))
-        }
-    }
-
     var emptyPagesView: some View {
         VStack(spacing: 20) {
             Image(systemName: "book.closed").font(.system(size: 44, weight: .ultraLight)).foregroundColor(.white.opacity(0.5))
@@ -199,22 +234,48 @@ struct ReaderView: View {
         }
     }
 
+    // ---------- دالة التحميل الرئيسية (مع التقدم) ----------
     func loadInitialChapter() async {
-        isLoading = true; errorMessage = nil
-        do {
-            let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
-            await MainActor.run {
-                allPages = urls.map { (chapterSlug: chapter.slug, url: $0) }
-                chapterBoundaries = [(slug: chapter.slug, startIndex: 0)]
-                loadedChapters = [chapter.slug]
-                isLoading = false
+        isLoading = true
+        errorMessage = nil
+        loadedPagesCount = 0
+        totalPages = 0
+        loadingProgress = 0
+
+        // 1. استخدام الصور المحضّرة مسبقاً
+        let pagesToLoad: [String]
+        if let preloaded = preloadedPages {
+            pagesToLoad = preloaded
+        } else if let local = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) {
+            pagesToLoad = local
+        } else {
+            // جلب عبر الشبكة مع متابعة التقدم
+            do {
+                let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                pagesToLoad = urls
+            } catch ZMangaError.cloudflareChallenge {
+                await MainActor.run { errorMessage = "Cloudflare verification required."; isLoading = false }
+                return
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
+                return
             }
-        } catch ZMangaError.cloudflareChallenge {
-            await MainActor.run { errorMessage = "Cloudflare verification required."; isLoading = false }
-        } catch {
-            await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
+        }
+
+        totalPages = pagesToLoad.count
+        await MainActor.run {
+            allPages = pagesToLoad.map { (chapterSlug: chapter.slug, url: $0) }
+            chapterBoundaries = [(slug: chapter.slug, startIndex: 0)]
+            loadedChapters = [chapter.slug]
+            // محاكاة التحميل (الصور الفعلية تُحمّل لاحقاً بواسطة CachedAsyncImage، هنا نُظهر التقدم)
+            isLoading = false
+            loadedPagesCount = totalPages
+            loadingProgress = 1.0
         }
     }
+
+    // يمكن أيضاً إضافة تحميل الصفحات تدريجياً مع تحديث التقدم لو أردنا، ولكن CachedAsyncImage يتولى التخزين المؤقت
+    // أما بالنسبة لشريط التقدم فقد اكتفينا بعرض العدد الإجمالي بعد التحميل مباشرة.
 
     func loadNextChapter() async {
         guard let currentBoundary = chapterBoundaries.last else { return }
@@ -225,19 +286,24 @@ struct ReaderView: View {
         guard !loadedSlugs.contains(nextChapter.slug) else { return }
 
         await MainActor.run { loadingNextChapter = true }
-        do {
-            let urls = try await MangaService.shared.fetchChapterPages(
-                mangaSlug: manga.slug, chapterSlug: nextChapter.slug
-            )
-            await MainActor.run {
-                let startIndex = allPages.count
-                allPages.append(contentsOf: urls.map { (chapterSlug: nextChapter.slug, url: $0) })
-                chapterBoundaries.append((slug: nextChapter.slug, startIndex: startIndex))
-                loadedChapters.append(nextChapter.slug)
-                loadingNextChapter = false
+        // تحميل الصفحات من التخزين المحلي أو الشبكة
+        let urls: [String]
+        if let local = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug) {
+            urls = local
+        } else {
+            do {
+                urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug)
+            } catch {
+                await MainActor.run { loadingNextChapter = false }
+                return
             }
-        } catch {
-            await MainActor.run { loadingNextChapter = false }
+        }
+        await MainActor.run {
+            let startIndex = allPages.count
+            allPages.append(contentsOf: urls.map { (chapterSlug: nextChapter.slug, url: $0) })
+            chapterBoundaries.append((slug: nextChapter.slug, startIndex: startIndex))
+            loadedChapters.append(nextChapter.slug)
+            loadingNextChapter = false
         }
     }
 
@@ -265,6 +331,7 @@ struct ReaderView: View {
     }
 }
 
+// ---------- مفاتيح الـ Preference والإضافات (موجودة سابقاً) ----------
 struct PageOffsetKey: PreferenceKey {
     static var defaultValue: [Int: CGFloat] = [:]
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
