@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - كائن مساعد للتنقل (يدعم Identifiable)
 struct DownloadedChapterSelection: Identifiable {
     let id = UUID()
     let manga: Manga
@@ -147,9 +146,7 @@ struct DownloadCompleteRow: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
-        Button {
-            action?()
-        } label: {
+        Button { action?() } label: {
             HStack(spacing: 12) {
                 if !chapter.mangaCover.isEmpty {
                     CachedAsyncImage(url: URL(string: chapter.mangaCover))
@@ -171,8 +168,7 @@ struct DownloadCompleteRow: View {
                         .foregroundColor(ZTheme.textTertiary)
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .foregroundColor(ZTheme.textTertiary)
+                Image(systemName: "chevron.right").foregroundColor(ZTheme.textTertiary)
             }
         }
     }
