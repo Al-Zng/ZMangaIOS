@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var network: NetworkMonitor
     @State private var selectedCategory: Category = .favorites
     @State private var sortOption: SortOption = .dateAdded
 
@@ -27,7 +28,7 @@ struct LibraryView: View {
         case .completed: list = store.completed
         case .downloaded:
             let slugs = Set(DownloadManager.shared.downloads.values.map { $0.mangaSlug })
-            return (store.library + store.wantToRead + store.completed).filter { slugs.contains($0.slug) }
+            list = (store.library + store.wantToRead + store.completed).filter { slugs.contains($0.slug) }
         }
         switch sortOption {
         case .dateAdded: return list
@@ -39,28 +40,40 @@ struct LibraryView: View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    // Category picker
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(Category.allCases, id: \.self) { cat in
-                                CategoryPill(title: cat.rawValue, isSelected: selectedCategory == cat) {
-                                    selectedCategory = cat
+                if !network.isConnected {
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundColor(ZTheme.textTertiary)
+                        Text("No Internet Connection")
+                            .font(.system(size: 15))
+                            .foregroundColor(ZTheme.textSecondary)
+                        Spacer()
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        // Category picker
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(Category.allCases, id: \.self) { cat in
+                                    CategoryPill(title: cat.rawValue, isSelected: selectedCategory == cat) {
+                                        selectedCategory = cat
+                                    }
                                 }
                             }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                    }
-                    .background(ZTheme.surface)
+                        .background(ZTheme.surface)
 
-                    Divider().background(ZTheme.border)
+                        Divider().background(ZTheme.border)
 
-                    if displayedManga.isEmpty {
-                        emptyState
-                    } else {
-                        libraryGrid
+                        if displayedManga.isEmpty {
+                            emptyState
+                        } else {
+                            libraryGrid
+                        }
                     }
                 }
             }
@@ -135,7 +148,7 @@ struct LibraryView: View {
         case .favorites: store.removeFromLibrary(manga)
         case .wantToRead: store.removeWantToRead(manga)
         case .completed: store.removeCompleted(manga)
-        case .downloaded: break // يمكن إضافة حذف جميع التحميلات إذا أردت
+        case .downloaded: break
         }
     }
 }
