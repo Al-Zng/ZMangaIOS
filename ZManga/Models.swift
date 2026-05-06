@@ -91,123 +91,97 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
+// MARK: - Download Manager (موجود لديك)
+class DownloadManager: ObservableObject {
+    static let shared = DownloadManager()
+    @Published var downloads: [String: DownloadedChapter] = [:]
+    @Published var activeDownloads: [String: Double] = [:]
+    private let downloadsKey = "zmanga_downloads"
+    init() { load() }
+
+    struct DownloadedChapter: Codable, Identifiable {
+        var id: String { "\(mangaSlug)_\(chapterSlug)" }
+        let mangaSlug: String
+        let chapterSlug: String
+        let chapterNumber: String
+        let mangaTitle: String
+        let pages: [String]
+        let downloadedAt: Date
+    }
+
+    func isDownloaded(mangaSlug: String, chapterSlug: String) -> Bool {
+        downloads["\(mangaSlug)_\(chapterSlug)"] != nil
+    }
+    func isDownloading(mangaSlug: String, chapterSlug: String) -> Bool {
+        activeDownloads["\(mangaSlug)_\(chapterSlug)"] != nil
+    }
+    func progress(mangaSlug: String, chapterSlug: String) -> Double {
+        activeDownloads["\(mangaSlug)_\(chapterSlug)"] ?? 0
+    }
+
+    @MainActor
+    func downloadChapter(manga: Manga, chapter: Chapter, pages: [String]) async { ... }
+    func deleteChapter(mangaSlug: String, chapterSlug: String) { ... }
+    func getPages(mangaSlug: String, chapterSlug: String) -> [String]? { ... }
+    private func getChapterDir(mangaSlug: String, chapterSlug: String) -> URL { ... }
+    private func save() { ... }
+    private func load() { ... }
+}
+
 // MARK: - AppStore
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
-
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var showCloudflareSheet = false
     @Published var cloudflareURL: URL? = nil
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
-
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
+    init() { loadHistory(); loadLibrary() }
 
-    init() {
-        loadHistory()
-        loadLibrary()
-    }
-
-    func saveProgress(_ progress: ReadingProgress) {
-        history.removeAll { $0.mangaSlug == progress.mangaSlug }
-        history.insert(progress, at: 0)
-        if history.count > 200 { history = Array(history.prefix(200)) }
-        persistHistory()
-    }
-
-    func clearHistory() {
-        history.removeAll()
-        persistHistory()
-    }
-
-    private func persistHistory() {
-        if let data = try? JSONEncoder().encode(history) {
-            UserDefaults.standard.set(data, forKey: historyKey)
-        }
-    }
-
-    private func loadHistory() {
-        guard let data = UserDefaults.standard.data(forKey: historyKey),
-              let decoded = try? JSONDecoder().decode([ReadingProgress].self, from: data) else { return }
-        history = decoded
-    }
-
-    func addToLibrary(_ manga: Manga) {
-        guard !library.contains(where: { $0.slug == manga.slug }) else { return }
-        library.insert(manga, at: 0)
-        persistLibrary()
-    }
-
-    func removeFromLibrary(_ manga: Manga) {
-        library.removeAll { $0.slug == manga.slug }
-        persistLibrary()
-    }
-
-    func isInLibrary(_ manga: Manga) -> Bool {
-        library.contains { $0.slug == manga.slug }
-    }
-
-    private func persistLibrary() {
-        if let data = try? JSONEncoder().encode(library) {
-            UserDefaults.standard.set(data, forKey: libraryKey)
-        }
-    }
-
-    private func loadLibrary() {
-        guard let data = UserDefaults.standard.data(forKey: libraryKey),
-              let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
-        library = decoded
-    }
-
-    func triggerCloudflare(url: URL) {
-        cloudflareURL = url
-        showCloudflareSheet = true
-    }
-
-    func triggerReload() {
-        reloadTrigger += 1
-    }
+    func saveProgress(_ progress: ReadingProgress) { ... }
+    func clearHistory() { ... }
+    private func persistHistory() { ... }
+    private func loadHistory() { ... }
+    func addToLibrary(_ manga: Manga) { ... }
+    func removeFromLibrary(_ manga: Manga) { ... }
+    func isInLibrary(_ manga: Manga) -> Bool { ... }
+    private func persistLibrary() { ... }
+    private func loadLibrary() { ... }
+    func triggerCloudflare(url: URL) { cloudflareURL = url; showCloudflareSheet = true }
+    func triggerReload() { reloadTrigger += 1 }
 }
 
-// MARK: - Design Tokens
+// MARK: - Design Tokens (بالعربي كما في مشروعك)
 struct ZTheme {
-    static let bg      = Color(hex: "#121212")
-    static let surface = Color(hex: "#1E1E1E")
-    static let card    = Color(hex: "#2C2C2C")
-    static let cardHover = Color(hex: "#3A3A3A")
-    static let border  = Color(hex: "#3A3A3A")
-    static let borderLight = Color(hex: "#4A4A4A")
-    static let accent  = Color(hex: "#4F79D4")
-    static let accentBright = Color(hex: "#6B93F0")
-    static let accentDim = Color(hex: "#4F79D4").opacity(0.15)
-    static let textPrimary   = Color(hex: "#E8ECF4")
-    static let textSecondary = Color(hex: "#8895AA")
-    static let textTertiary  = Color(hex: "#4A5568")
+    static let bg       = Color(hex: "#0D0D0D")
+    static let surface  = Color(hex: "#161616")
+    static let card     = Color(hex: "#1C1C1C")
+    static let cardHover = Color(hex: "#242424")
+    static let border      = Color(hex: "#2A2A2A")
+    static let borderLight = Color(hex: "#383838")
+    static let accent       = Color(hex: "#F5A623")
+    static let accentBright = Color(hex: "#FFB940")
+    static let accentDim    = Color(hex: "#F5A623").opacity(0.15)
+    static let textPrimary   = Color(hex: "#F0F0F0")
+    static let textSecondary = Color(hex: "#8A8A8A")
+    static let textTertiary  = Color(hex: "#4A4A4A")
     static let danger  = Color(hex: "#E85A6A")
     static let success = Color(hex: "#4CAF82")
-    static let warning = Color(hex: "#E8A84F")
+    static let warning = Color(hex: "#F5A623")
+    static let goldGradient = LinearGradient(
+        colors: [Color(hex: "#F5A623"), Color(hex: "#E8850A")],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
 }
 
 extension Color {
-    init(hex: String) {
-        let h = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: h).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch h.count {
-        case 3:  (a, r, g, b) = (255, (int >> 8)*17, (int >> 4 & 0xF)*17, (int & 0xF)*17)
-        case 6:  (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:  (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default: (a, r, g, b) = (255, 0, 0, 0)
-        }
-        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255,
-                  blue: Double(b)/255, opacity: Double(a)/255)
-    }
+    init(hex: String) { ... }
 }
 
-// MARK: - Cached Async Image (Final – with Referer and retry)
+// MARK: - Cached Async Image (مع Referer وإعادة المحاولة)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -215,69 +189,44 @@ struct CachedAsyncImage: View {
     @State private var loadFailed = false
     @State private var attempt = 0
 
-    private static let cache = URLCache(
-        memoryCapacity: 80 * 1024 * 1024,
-        diskCapacity: 400 * 1024 * 1024,
-        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-    )
+    private static let cache = URLCache(memoryCapacity: 80*1024*1024, diskCapacity: 400*1024*1024)
 
     var body: some View {
         Group {
             if let image = image {
-                Image(uiImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .antialiased(true)
+                Image(uiImage: image).resizable().interpolation(.high).antialiased(true)
             } else if isLoading && attempt < 3 {
-                Rectangle()
-                    .fill(Color(white: 0.12))
-                    .overlay(ProgressView().tint(ZTheme.accent))
+                Rectangle().fill(Color(white:0.12)).overlay(ProgressView().tint(ZTheme.accent))
             } else {
-                Rectangle()
-                    .fill(Color(white: 0.12))
-                    .overlay(
-                        Image(systemName: "photo")
-                            .font(.title2)
-                            .foregroundColor(ZTheme.textTertiary)
-                    )
+                Rectangle().fill(Color(white:0.12)).overlay(Image(systemName:"photo").font(.title2).foregroundColor(.gray))
             }
         }
         .task(id: url?.absoluteString) { await loadImage() }
     }
 
     private func loadImage() async {
-        guard let url = url else {
-            isLoading = false; loadFailed = true; return
-        }
+        guard let url = url else { isLoading=false; loadFailed=true; return }
         let urlStr = url.absoluteString.lowercased()
-        if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") ||
-           urlStr.contains("/favicon") {
-            isLoading = false; loadFailed = true; return
+        if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") || urlStr.contains("/favicon") {
+            isLoading=false; loadFailed=true; return
         }
-
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
         config.timeoutIntervalForRequest = 15
         let session = URLSession(configuration: config)
-
         for _ in 0..<3 {
             attempt += 1
-            var request = URLRequest(url: url)
-            request.setValue("https://lek-manga.net", forHTTPHeaderField: "Referer")
-            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+            var req = URLRequest(url: url)
+            req.setValue("https://lekmanga.site", forHTTPHeaderField: "Referer")
+            req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
             do {
-                let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse,
-                   httpResp.statusCode == 200,
-                   let img = UIImage(data: data),
-                   img.size.width > 0 {
+                let (data, resp) = try await session.data(for: req)
+                if let http = resp as? HTTPURLResponse, http.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
                     await MainActor.run { image = img; isLoading = false }
                     return
                 }
-            } catch {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
+            } catch { try? await Task.sleep(nanoseconds: 500_000_000) }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
     }
