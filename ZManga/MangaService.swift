@@ -7,78 +7,157 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    private var webView: WKWebView?
-
-    private func getWebView() -> WKWebView {
-        if let wv = webView { return wv }
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = WKWebsiteDataStore.default()
-        let wv = WKWebView(frame: .zero, configuration: config)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        self.webView = wv
-        return wv
-    }
-
+    // MARK: - جلب HTML الأساسي (مع كشف Cloudflare)
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else {
             Logger.shared.log("Bad URL: \(urlString)", category: "MangaService")
             throw URLError(.badURL)
         }
         Logger.shared.log("Fetching HTML: \(urlString)", category: "MangaService")
-        let webView = getWebView()
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        webView.load(request)
 
-        do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                var observer: NSKeyValueObservation?
-                observer = webView.observe(\.isLoading, options: [.new]) { _, change in
-                    if change.newValue == false {
-                        observer?.invalidate()
-                        continuation.resume()
-                    }
-                }
-            }
-        } catch {
-            Logger.shared.log("Loading error: \(error.localizedDescription)", category: "MangaService")
-            throw error
+        return try await withCheckedThrowingContinuation { continuation in
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = WKWebsiteDataStore.default()
+            let webView = WKWebView(frame: .zero, configuration: config)
+            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+            let nav = NavigationHandler(continuation: continuation)
+            webView.navigationDelegate = nav
+            // منع تحرير nav
+            objc_setAssociatedObject(webView, "navHandler", nav, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            webView.load(request)
         }
-
-        let html: String
-        do {
-            html = try await withCheckedThrowingContinuation { continuation in
-                webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                    if let html = result as? String {
-                        continuation.resume(returning: html)
-                    } else {
-                        continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                    }
-                }
-            }
-        } catch {
-            Logger.shared.log("JS evaluation error: \(error.localizedDescription)", category: "MangaService")
-            throw error
-        }
-
-        Logger.shared.log("HTML Length: \(html.count)", category: "MangaService")
-
-        let isCloudflare = html.contains("Just a moment") ||
-                           html.contains("cf-browser-verification") ||
-                           html.contains("Checking your browser") ||
-                           html.contains("Attention Required")
-        Logger.shared.log("Cloudflare detected: \(isCloudflare)", category: "MangaService")
-        if isCloudflare {
-    Logger.shared.log("Triggering Cloudflare sheet for URL: \(url.absoluteString)", category: "MangaService")
-    await MainActor.run {
-        AppStore.currentStore?.triggerCloudflare(url: url)
     }
-    // ننتظر قليلاً حتى تعرض الشاشة قبل إلغاء المهمة
-    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 ثانية
-    throw ZMangaError.cloudflareChallenge
-}
 
-        return html
+    // MARK: - وكيل الملاحة (للتقاط HTML ومعالجة Cloudflare)
+    private class NavigationHandler: NSObject, WKNavigationDelegate {
+        let continuation: CheckedContinuation<String, Error>
+
+        init(continuation: CheckedContinuation<String, Error>) {
+            self.continuation = continuation
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
+                guard let self = self else { return }
+                if let html = result as? String {
+                    self.handleHTML(html, from: webView)
+                } else {
+                    self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            continuation.resume(throwing: error)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            continuation.resume(throwing: error)
+        }
+
+        private func handleHTML(_ html: String, from webView: WKWebView) {
+            let isCloudflare = html.contains("Just a moment") ||
+                               html.contains("cf-browser-verification") ||
+                               html.contains("Checking your browser") ||
+                               html.contains("Attention Required")
+
+            Logger.shared.log("HTML Length: \(html.count)", category: "MangaService")
+            Logger.shared.log("Cloudflare detected: \(isCloudflare)", category: "MangaService")
+
+            if isCloudflare {
+                if let url = webView.url {
+                    Logger.shared.log("Triggering Cloudflare sheet for URL: \(url.absoluteString)", category: "MangaService")
+                    DispatchQueue.main.async {
+                        AppStore.currentStore?.triggerCloudflare(url: url)
+                    }
+                }
+                // إتاحة فرصة للـ sheet للظهور ثم رمي الخطأ
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.continuation.resume(throwing: ZMangaError.cloudflareChallenge)
+                }
+            } else {
+                continuation.resume(returning: html)
+            }
+        }
+    }
+
+    // MARK: - جلب صفحات الفصل (مع انتظار الصور البطيئة)
+    private func fetchChapterHTMLWithLazyImages(urlString: String) async throws -> String {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        Logger.shared.log("Fetching chapter with lazy loading: \(urlString)", category: "ChapterPages")
+
+        // المرحلة 1: تحميل الصفحة
+        let html = try await fetchHTML(urlString: urlString)
+
+        // إذا لم نجد chapter_id، نحاول انتظار الصور البطيئة
+        guard firstCapture(pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#, in: html) != nil else {
+            // لا chapter_id، سنأخذ الـ HTML كما هو (قد لا يحتوي على صور)
+            return html
+        }
+
+        // المرحلة 2: إنشاء WebView جديد لانتظار الصور
+        return try await withCheckedThrowingContinuation { continuation in
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = WKWebsiteDataStore.default()
+            let webView = WKWebView(frame: .zero, configuration: config)
+            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+
+            let waitJS = """
+            new Promise((resolve) => {
+                let attempts = 0;
+                const check = () => {
+                    attempts++;
+                    const imgs = document.querySelectorAll('.reading-content img');
+                    const hasRealSrc = Array.from(imgs).some(img => {
+                        const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
+                        return src.startsWith('http') && !src.includes('data:image');
+                    });
+                    if (hasRealSrc || attempts >= 30) resolve(attempts);
+                    else setTimeout(check, 300);
+                };
+                setTimeout(check, 800);
+            });
+            """
+
+            class LazyDelegate: NSObject, WKNavigationDelegate {
+                let continuation: CheckedContinuation<String, Error>
+                init(continuation: CheckedContinuation<String, Error>) {
+                    self.continuation = continuation
+                }
+                func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+                    // انتظر حتى تظهر الصور
+                    webView.evaluateJavaScript(waitJS) { [weak self] _, _ in
+                        // ثم استخلص HTML
+                        webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
+                            guard let self = self else { return }
+                            if let html = result as? String {
+                                self.continuation.resume(returning: html)
+                            } else {
+                                self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                            }
+                        }
+                    }
+                }
+                func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+                    continuation.resume(throwing: error)
+                }
+                func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+                    continuation.resume(throwing: error)
+                }
+            }
+
+            let delegate = LazyDelegate(continuation: continuation)
+            webView.navigationDelegate = delegate
+            objc_setAssociatedObject(webView, "lazyDelegate", delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            webView.load(request)
+        }
     }
 
     // MARK: - Public API
@@ -111,67 +190,27 @@ class MangaService: NSObject, ObservableObject {
 
         let html = try await fetchHTML(urlString: url)
 
+        // 1. محاولة AJAX أولاً
         if let chapterId = firstCapture(pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#, in: html) {
             Logger.shared.log("Chapter ID found: \(chapterId). Trying AJAX...", category: "ChapterPages")
             if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
                 Logger.shared.log("AJAX success: \(pages.count) pages", category: "ChapterPages")
                 return pages
-            } else {
-                Logger.shared.log("AJAX failed or empty. Falling back to lazy loading detection.", category: "ChapterPages")
             }
-        } else {
-            Logger.shared.log("Chapter ID not found. Will try lazy loading.", category: "ChapterPages")
         }
 
-        let webView = getWebView()
-        let waitJS = """
-        new Promise((resolve) => {
-            let attempts = 0;
-            const check = () => {
-                attempts++;
-                const imgs = document.querySelectorAll('.reading-content img');
-                const hasRealSrc = Array.from(imgs).some(img => {
-                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
-                    return src.startsWith('http') && !src.includes('data:image');
-                });
-                if (hasRealSrc || attempts >= 30) resolve(attempts);
-                else setTimeout(check, 300);
-            };
-            setTimeout(check, 800);
-        });
-        """
-
+        // 2. انتظار الصور البطيئة (lazy loading) عبر WebView جديد
+        Logger.shared.log("Attempting lazy image loading for chapter...", category: "ChapterPages")
         do {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
-            }
+            let updatedHTML = try await fetchChapterHTMLWithLazyImages(urlString: url)
+            let pages = parseChapterPages(html: updatedHTML)
+            Logger.shared.log("Lazy loading parsed \(pages.count) pages", category: "ChapterPages")
+            return pages
         } catch {
-            Logger.shared.log("Lazy load wait JS error: \(error.localizedDescription)", category: "ChapterPages")
-            throw error
+            Logger.shared.log("Lazy loading failed: \(error.localizedDescription)", category: "ChapterPages")
+            // محاولة أخيرة على الـ HTML الأصلي
+            return parseChapterPages(html: html)
         }
-
-        let updatedHTML: String
-        do {
-            updatedHTML = try await withCheckedThrowingContinuation { continuation in
-                webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                    if let html = result as? String {
-                        continuation.resume(returning: html)
-                    } else {
-                        continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                    }
-                }
-            }
-        } catch {
-            Logger.shared.log("Updated HTML retrieval error: \(error.localizedDescription)", category: "ChapterPages")
-            throw error
-        }
-
-        let pages = parseChapterPages(html: updatedHTML)
-        Logger.shared.log("Parsed pages: \(pages.count)", category: "ChapterPages")
-        if pages.isEmpty {
-            Logger.shared.log("Warning: No pages found. HTML snippet: \(String(updatedHTML.prefix(500)))", category: "ChapterPages")
-        }
-        return pages
     }
 
     func fetchByGenre(genre: String, page: Int = 1) async throws -> [Manga] {
@@ -201,9 +240,7 @@ class MangaService: NSObject, ObservableObject {
         request.httpBody = body.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            return []
-        }
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return [] }
 
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
@@ -212,11 +249,9 @@ class MangaService: NSObject, ObservableObject {
            let images = jsonDict["data"] as? [[String: Any]] {
             return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
-
         if let html = String(data: data, encoding: .utf8), html.contains("<img") {
             return parseChapterPages(html: html)
         }
-
         return []
     }
 
@@ -486,6 +521,7 @@ class MangaService: NSObject, ObservableObject {
     }
 }
 
+// MARK: - الأخطاء المخصصة
 enum ZMangaError: LocalizedError {
     case cloudflareChallenge
     case parsingFailed
