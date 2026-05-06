@@ -11,7 +11,7 @@ struct ReaderView: View {
     var preloadedPages: [String]? = nil
 
     @State private var isLoading = true
-    @State private var loadingProgress: Double = 0          // 0...1
+    @State private var loadingProgress: Double = 0
     @State private var loadedPagesCount = 0
     @State private var totalPages = 0
     @State private var currentPage = 0
@@ -23,7 +23,6 @@ struct ReaderView: View {
     @State private var currentChapterSlug: String
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
-
     @State private var visiblePage = 0
 
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0, preloadedPages: [String]? = nil) {
@@ -50,6 +49,8 @@ struct ReaderView: View {
                 loadingView
             } else if let err = errorMessage, allPages.isEmpty {
                 errorOverlay(err)
+            } else if !isLoading && allPages.isEmpty {
+                emptyPagesView
             } else {
                 readerContent
             }
@@ -82,7 +83,41 @@ struct ReaderView: View {
         .onAppear { resetUITimer() }
     }
 
-    // ---------- المحتوى الرئيسي (بدون loading) ----------
+    // MARK: - Loading View
+    var loadingView: some View {
+        VStack(spacing: 30) {
+            Spacer()
+            VStack(spacing: 16) {
+                Image(systemName: "book.pages")
+                    .font(.system(size: 40, weight: .ultraLight))
+                    .foregroundColor(ZTheme.accent)
+
+                if totalPages > 0 {
+                    VStack(spacing: 12) {
+                        ProgressView(value: loadingProgress)
+                            .tint(ZTheme.accent)
+                            .scaleEffect(x: 1, y: 2, anchor: .center)
+                        Text("\(loadedPagesCount) / \(totalPages) pages")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(ZTheme.textSecondary)
+                    }
+                    .padding(.horizontal, 40)
+                } else {
+                    ProgressView()
+                        .tint(ZTheme.accent)
+                        .scaleEffect(1.2)
+                }
+
+                Text("Preparing chapter...")
+                    .font(.system(size: 13))
+                    .foregroundColor(ZTheme.textTertiary)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Reader Content
     var readerContent: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
@@ -130,41 +165,7 @@ struct ReaderView: View {
         }
     }
 
-    // ---------- واجهة التحميل الجديدة (شريط التقدم) ----------
-    var loadingView: some View {
-        VStack(spacing: 30) {
-            Spacer()
-            VStack(spacing: 16) {
-                Image(systemName: "book.pages")
-                    .font(.system(size: 40, weight: .ultraLight))
-                    .foregroundColor(ZTheme.accent)
-
-                if totalPages > 0 {
-                    VStack(spacing: 12) {
-                        ProgressView(value: loadingProgress)
-                            .tint(ZTheme.accent)
-                            .scaleEffect(x: 1, y: 2, anchor: .center)
-                        Text("\(loadedPagesCount) / \(totalPages) pages")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(ZTheme.textSecondary)
-                    }
-                    .padding(.horizontal, 40)
-                } else {
-                    ProgressView()
-                        .tint(ZTheme.accent)
-                        .scaleEffect(1.2)
-                }
-
-                Text("Preparing chapter...")
-                    .font(.system(size: 13))
-                    .foregroundColor(ZTheme.textTertiary)
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // ---------- الأجزاء الأخرى (topBar, bottomBar, …) تبقى كما هي إلى حد كبير ----------
+    // MARK: - Top Bar
     var topBar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -194,6 +195,7 @@ struct ReaderView: View {
         .transition(.opacity)
     }
 
+    // MARK: - Bottom Bar
     var bottomBar: some View {
         Group {
             if !allPages.isEmpty {
@@ -211,6 +213,7 @@ struct ReaderView: View {
         }
     }
 
+    // MARK: - Empty / Error
     var emptyPagesView: some View {
         VStack(spacing: 20) {
             Image(systemName: "book.closed").font(.system(size: 44, weight: .ultraLight)).foregroundColor(.white.opacity(0.5))
@@ -234,7 +237,7 @@ struct ReaderView: View {
         }
     }
 
-    // ---------- دالة التحميل الرئيسية (مع التقدم) ----------
+    // MARK: - تحميل الفصل
     func loadInitialChapter() async {
         isLoading = true
         errorMessage = nil
@@ -242,14 +245,12 @@ struct ReaderView: View {
         totalPages = 0
         loadingProgress = 0
 
-        // 1. استخدام الصور المحضّرة مسبقاً
         let pagesToLoad: [String]
         if let preloaded = preloadedPages {
             pagesToLoad = preloaded
         } else if let local = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) {
             pagesToLoad = local
         } else {
-            // جلب عبر الشبكة مع متابعة التقدم
             do {
                 let urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
                 pagesToLoad = urls
@@ -263,19 +264,24 @@ struct ReaderView: View {
         }
 
         totalPages = pagesToLoad.count
+        // محاكاة تحميل الصفحات (اختياري لكن لإظهار شريط التقدم)
+        for i in 0..<pagesToLoad.count {
+            await MainActor.run {
+                loadedPagesCount = i + 1
+                loadingProgress = Double(loadedPagesCount) / Double(totalPages)
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000) // 0.01s لكل صفحة لتحسين المظهر
+        }
+
         await MainActor.run {
             allPages = pagesToLoad.map { (chapterSlug: chapter.slug, url: $0) }
             chapterBoundaries = [(slug: chapter.slug, startIndex: 0)]
             loadedChapters = [chapter.slug]
-            // محاكاة التحميل (الصور الفعلية تُحمّل لاحقاً بواسطة CachedAsyncImage، هنا نُظهر التقدم)
             isLoading = false
             loadedPagesCount = totalPages
             loadingProgress = 1.0
         }
     }
-
-    // يمكن أيضاً إضافة تحميل الصفحات تدريجياً مع تحديث التقدم لو أردنا، ولكن CachedAsyncImage يتولى التخزين المؤقت
-    // أما بالنسبة لشريط التقدم فقد اكتفينا بعرض العدد الإجمالي بعد التحميل مباشرة.
 
     func loadNextChapter() async {
         guard let currentBoundary = chapterBoundaries.last else { return }
@@ -286,7 +292,6 @@ struct ReaderView: View {
         guard !loadedSlugs.contains(nextChapter.slug) else { return }
 
         await MainActor.run { loadingNextChapter = true }
-        // تحميل الصفحات من التخزين المحلي أو الشبكة
         let urls: [String]
         if let local = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug) {
             urls = local
@@ -331,7 +336,7 @@ struct ReaderView: View {
     }
 }
 
-// ---------- مفاتيح الـ Preference والإضافات (موجودة سابقاً) ----------
+// MARK: - Preference Keys
 struct PageOffsetKey: PreferenceKey {
     static var defaultValue: [Int: CGFloat] = [:]
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
