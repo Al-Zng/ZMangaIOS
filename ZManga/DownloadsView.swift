@@ -3,12 +3,25 @@ import SwiftUI
 struct DownloadsView: View {
     @EnvironmentObject var store: AppStore
     @StateObject private var dm = DownloadManager.shared
+    @State private var selectedChapter: (manga: Manga, chapter: Chapter, pages: [String])? = nil
 
     var body: some View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
-                if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
+
+                if !NetworkMonitor.shared.isConnected {
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundColor(ZTheme.textTertiary)
+                        Text("No Internet Connection")
+                            .font(.system(size: 15))
+                            .foregroundColor(ZTheme.textSecondary)
+                        Spacer()
+                    }
+                } else if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 48, weight: .ultraLight))
@@ -23,14 +36,17 @@ struct DownloadsView: View {
                             Section("Downloading") {
                                 ForEach(Array(dm.activeDownloads.keys), id: \.self) { key in
                                     if let chapter = dm.downloads[key] ?? dm.activeChapterMeta(key) {
-                                        DownloadingRow(key: key, chapter: chapter, progress: dm.activeDownloads[key] ?? 0)
+                                        DownloadingRow(key: key, chapter: chapter,
+                                                       progress: dm.activeDownloads[key] ?? 0)
                                     }
                                 }
                             }
                         }
                         Section("Completed") {
                             ForEach(Array(dm.downloads.values)) { chapter in
-                                DownloadCompleteRow(chapter: chapter)
+                                DownloadCompleteRow(chapter: chapter) {
+                                    openDownloadedChapter(chapter)
+                                }
                             }
                             .onDelete { indexSet in
                                 for idx in indexSet {
@@ -55,7 +71,20 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
+            .fullScreenCover(item: $selectedChapter) { item in
+                ReaderView(manga: item.manga, chapter: item.chapter,
+                           allChapters: [item.chapter],
+                           initialPage: 0, preloadedPages: item.pages)
+                    .environmentObject(store)
+            }
         }
+    }
+
+    private func openDownloadedChapter(_ chapter: DownloadManager.DownloadedChapter) {
+        guard let pages = dm.getPages(mangaSlug: chapter.mangaSlug, chapterSlug: chapter.chapterSlug) else { return }
+        let manga = Manga(slug: chapter.mangaSlug, title: chapter.mangaTitle, coverURL: chapter.mangaCover)
+        let chap = Chapter(slug: chapter.chapterSlug, number: chapter.chapterNumber, pages: pages)
+        selectedChapter = (manga, chap, pages)
     }
 }
 
@@ -107,9 +136,12 @@ struct DownloadingRow: View {
 
 struct DownloadCompleteRow: View {
     let chapter: DownloadManager.DownloadedChapter
+    var action: (() -> Void)? = nil
 
     var body: some View {
-        NavigationLink(destination: MangaDetailView(slug: chapter.mangaSlug, preloadTitle: chapter.mangaTitle, preloadCover: chapter.mangaCover)) {
+        Button {
+            action?()
+        } label: {
             HStack(spacing: 12) {
                 if !chapter.mangaCover.isEmpty {
                     CachedAsyncImage(url: URL(string: chapter.mangaCover))
@@ -130,6 +162,9 @@ struct DownloadCompleteRow: View {
                         .font(.system(size: 11))
                         .foregroundColor(ZTheme.textTertiary)
                 }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundColor(ZTheme.textTertiary)
             }
         }
     }
