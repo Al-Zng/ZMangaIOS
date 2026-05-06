@@ -1,4 +1,4 @@
-  Foundation
+import Foundation
 import WebKit
 
 // MARK: - MangaService
@@ -7,21 +7,66 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    private var webView: WKWebView?
+    // تم حذف الخاصية المشتركة webView لتجنب التعارض
+    // private var webView: WKWebView?
+    // private func getWebView() -> WKWebView { ... }
 
-    private func getWebView() -> WKWebView {
-        if let wv = webView { return wv }
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = WKWebsiteDataStore.default()
-        let wv = WKWebView(frame: .zero, configuration: config)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        self.webView = wv
-        return wv
-    }
-
+    // MARK: - دالة جلب HTML الأساسية (تُنشئ WebView جديداً كل مرة)
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-        let webView = getWebView()
+
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        webView.load(request)
+
+        // انتظار حتى ينتهي التحميل
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var observer: NSKeyValueObservation?
+            observer = webView.observe(\.isLoading, options: [.new]) { _, change in
+                if change.newValue == false {
+                    observer?.invalidate()
+                    continuation.resume()
+                }
+            }
+        }
+
+        // جلب HTML النهائي
+        let html: String = try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                if let html = result as? String {
+                    continuation.resume(returning: html)
+                } else {
+                    continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        // التحقق من Cloudflare
+        if html.contains("Just a moment") ||
+           html.contains("cf-browser-verification") ||
+           html.contains("Checking your browser") ||
+           html.contains("Attention Required") {
+            AppStore.currentStore?.triggerCloudflare(url: url)
+            throw ZMangaError.cloudflareChallenge
+        }
+
+        return html
+    }
+
+    // MARK: - دالة خاصة بـ fetchChapterPages تحتاج WebView بعد التحميل
+    private func fetchHTMLForChapter(urlString: String) async throws -> (html: String, webView: WKWebView) {
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = WKWebsiteDataStore.default()
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         webView.load(request)
@@ -54,7 +99,7 @@ class MangaService: NSObject, ObservableObject {
             throw ZMangaError.cloudflareChallenge
         }
 
-        return html
+        return (html, webView)
     }
 
     // MARK: - Public API
@@ -84,10 +129,10 @@ class MangaService: NSObject, ObservableObject {
     func fetchChapterPages(mangaSlug: String, chapterSlug: String) async throws -> [String] {
         let url = "\(baseURL)/manga/\(mangaSlug)/\(chapterSlug)/"
 
-        // 1. تحميل الصفحة أولاً للحصول على chapter_id
-        let html = try await fetchHTML(urlString: url)
+        // 1. تحميل الصفحة والحصول على الـ webView العامل
+        let (html, webView) = try await fetchHTMLForChapter(urlString: url)
 
-        // 2. محاولة AJAX أولاً (الأسرع والأموثق)
+        // 2. محاولة AJAX أولاً (الأسرع والأمثل)
         if let chapterId = firstCapture(
             pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#,
             in: html
@@ -97,8 +142,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // 3. الـ WebView محمّل بالفعل — الآن ننتظر حتى يُحقن lazy loading الصور في DOM
-        let webView = getWebView()
+        // 3. الانتظار حتى تُحقن الصور في DOM عبر lazy loading (باستخدام نفس webView)
         let waitJS = """
         new Promise((resolve) => {
             let attempts = 0;
@@ -112,7 +156,6 @@ class MangaService: NSObject, ObservableObject {
                 if (hasRealSrc || attempts >= 30) resolve(attempts);
                 else setTimeout(check, 300);
             };
-            // أعط الـ JS وقتاً ليبدأ
             setTimeout(check, 800);
         });
         """
@@ -121,7 +164,7 @@ class MangaService: NSObject, ObservableObject {
             webView.evaluateJavaScript(waitJS) { _, _ in cont.resume() }
         }
 
-        // 4. الآن اجلب الـ HTML بعد أن عمل الـ lazy loading
+        // 4. جلب HTML المحدث بعد lazy loading
         let updatedHTML: String = try await withCheckedThrowingContinuation { continuation in
             webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
                 if let html = result as? String {
@@ -141,7 +184,7 @@ class MangaService: NSObject, ObservableObject {
         return parseMangaList(html: html, extractChapterInfo: false)
     }
 
-    // MARK: - AJAX Image Fetching (الإصلاح الرئيسي)
+    // MARK: - AJAX Image Fetching
 
     private func fetchChapterImagesViaAJAX(chapterId: String) async throws -> [String] {
         guard let ajaxURL = URL(string: "\(baseURL)/wp-admin/admin-ajax.php") else { return [] }
@@ -153,7 +196,6 @@ class MangaService: NSObject, ObservableObject {
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
 
-        // نسخ الكوكيز من WebView إلى الطلب
         let cookies = HTTPCookieStorage.shared.cookies(for: ajaxURL) ?? []
         let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
@@ -168,7 +210,6 @@ class MangaService: NSObject, ObservableObject {
             return []
         }
 
-        // محاولة تفسير الـ response كـ JSON (مصفوفة أو كائن ببيانات)
         if let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return jsonArray.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
@@ -177,15 +218,12 @@ class MangaService: NSObject, ObservableObject {
             return images.compactMap { $0["url"] as? String }.filter { $0.hasPrefix("http") }
         }
 
-        // إذا كان الـ response عبارة عن HTML (حالة نادرة)
         if let html = String(data: data, encoding: .utf8), html.contains("<img") {
             return parseChapterPages(html: html)
         }
 
         return []
     }
-
-
 
     // MARK: - Parse Manga List
 
@@ -321,7 +359,7 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (يدعم data-lazy-src + استخراج محتوى reading-content)
+    // MARK: - Parse Chapter Pages
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
@@ -406,17 +444,14 @@ class MangaService: NSObject, ObservableObject {
 
     private func extractImageURL(fromTags tags: [String]) -> String? {
         for tag in tags {
-            // data-lazy-src أولاً
             if let dataLazy = firstCapture(pattern: #"data-lazy-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataLazy.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
-            // data-src
             if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") { return url }
             }
-            // src
             if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
                 let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
                 if url.hasPrefix("http") && !isLogoOnly(url) { return url }
