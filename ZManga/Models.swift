@@ -160,6 +160,14 @@ class DownloadManager: ObservableObject {
         save()
     }
 
+    func removeAllDownloads() {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let downloadsDir = base.appendingPathComponent("downloads")
+        try? FileManager.default.removeItem(at: downloadsDir)
+        downloads.removeAll()
+        save()
+    }
+
     func getPages(mangaSlug: String, chapterSlug: String) -> [String]? {
         downloads["\(mangaSlug)_\(chapterSlug)"]?.pages
     }
@@ -186,75 +194,156 @@ class DownloadManager: ObservableObject {
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
-    @Published var library: [Manga] = []
+    @Published var library: [Manga] = []                   // Favorites
+    @Published var wantToRead: [Manga] = []
+    @Published var completed: [Manga] = []
     @Published var showCloudflareSheet = false
     @Published var cloudflareURL: URL? = nil
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
+
+    // Cached home data
+    @Published var cachedLatest: [Manga]?
+    @Published var cachedPopular: [Manga]?
+
     private let historyKey = "zmanga_history"
     private let libraryKey = "zmanga_library"
+    private let wantToReadKey = "zmanga_wanttoread"
+    private let completedKey = "zmanga_completed"
+    private let cachedLatestKey = "zmanga_cached_latest"
+    private let cachedPopularKey = "zmanga_cached_popular"
 
     init() {
         loadHistory()
         loadLibrary()
+        loadWantToRead()
+        loadCompleted()
+        loadCached()
     }
 
+    // MARK: - History
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
         history.insert(progress, at: 0)
         if history.count > 200 { history = Array(history.prefix(200)) }
         persistHistory()
     }
-
     func clearHistory() {
         history.removeAll()
         persistHistory()
     }
-
     private func persistHistory() {
         if let data = try? JSONEncoder().encode(history) {
             UserDefaults.standard.set(data, forKey: historyKey)
         }
     }
-
     private func loadHistory() {
         guard let data = UserDefaults.standard.data(forKey: historyKey),
               let decoded = try? JSONDecoder().decode([ReadingProgress].self, from: data) else { return }
         history = decoded
     }
 
+    // MARK: - Favorites (Library)
     func addToLibrary(_ manga: Manga) {
         guard !library.contains(where: { $0.slug == manga.slug }) else { return }
         library.insert(manga, at: 0)
         persistLibrary()
     }
-
     func removeFromLibrary(_ manga: Manga) {
         library.removeAll { $0.slug == manga.slug }
         persistLibrary()
     }
-
     func isInLibrary(_ manga: Manga) -> Bool {
         library.contains { $0.slug == manga.slug }
     }
-
     private func persistLibrary() {
         if let data = try? JSONEncoder().encode(library) {
             UserDefaults.standard.set(data, forKey: libraryKey)
         }
     }
-
     private func loadLibrary() {
         guard let data = UserDefaults.standard.data(forKey: libraryKey),
               let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
         library = decoded
     }
 
+    // MARK: - Want to Read
+    func addWantToRead(_ manga: Manga) {
+        guard !wantToRead.contains(where: { $0.slug == manga.slug }) else { return }
+        wantToRead.insert(manga, at: 0)
+        persistWantToRead()
+    }
+    func removeWantToRead(_ manga: Manga) {
+        wantToRead.removeAll { $0.slug == manga.slug }
+        persistWantToRead()
+    }
+    func isWantToRead(_ manga: Manga) -> Bool {
+        wantToRead.contains { $0.slug == manga.slug }
+    }
+    private func persistWantToRead() {
+        if let data = try? JSONEncoder().encode(wantToRead) {
+            UserDefaults.standard.set(data, forKey: wantToReadKey)
+        }
+    }
+    private func loadWantToRead() {
+        guard let data = UserDefaults.standard.data(forKey: wantToReadKey),
+              let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
+        wantToRead = decoded
+    }
+
+    // MARK: - Completed
+    func addCompleted(_ manga: Manga) {
+        guard !completed.contains(where: { $0.slug == manga.slug }) else { return }
+        completed.insert(manga, at: 0)
+        persistCompleted()
+    }
+    func removeCompleted(_ manga: Manga) {
+        completed.removeAll { $0.slug == manga.slug }
+        persistCompleted()
+    }
+    func isCompleted(_ manga: Manga) -> Bool {
+        completed.contains { $0.slug == manga.slug }
+    }
+    private func persistCompleted() {
+        if let data = try? JSONEncoder().encode(completed) {
+            UserDefaults.standard.set(data, forKey: completedKey)
+        }
+    }
+    private func loadCompleted() {
+        guard let data = UserDefaults.standard.data(forKey: completedKey),
+              let decoded = try? JSONDecoder().decode([Manga].self, from: data) else { return }
+        completed = decoded
+    }
+
+    // MARK: - Cached Home Data
+    func saveCachedLatest(_ items: [Manga]) {
+        cachedLatest = items
+        if let data = try? JSONEncoder().encode(items) {
+            UserDefaults.standard.set(data, forKey: cachedLatestKey)
+        }
+    }
+    func saveCachedPopular(_ items: [Manga]) {
+        cachedPopular = items
+        if let data = try? JSONEncoder().encode(items) {
+            UserDefaults.standard.set(data, forKey: cachedPopularKey)
+        }
+    }
+    private func loadCached() {
+        if let data = UserDefaults.standard.data(forKey: cachedLatestKey),
+           let decoded = try? JSONDecoder().decode([Manga].self, from: data) {
+            cachedLatest = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: cachedPopularKey),
+           let decoded = try? JSONDecoder().decode([Manga].self, from: data) {
+            cachedPopular = decoded
+        }
+    }
+
+    // MARK: - Cloudflare
     func triggerCloudflare(url: URL) {
         cloudflareURL = url
         showCloudflareSheet = true
     }
-
     func triggerReload() {
         reloadTrigger += 1
     }
@@ -300,7 +389,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (مع Referer وإعادة المحاولة) - تم تعديل إعادة التعيين
+// MARK: - Cached Async Image (مع Referer وإعادة المحاولة) - إعادة تعيين الحالة
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -336,7 +425,7 @@ struct CachedAsyncImage: View {
             }
         }
         .task(id: url?.absoluteString) {
-            // إعادة تعيين الحالة عند تغيّر الرابط أو عند أول تحميل
+            // إعادة تعيين الحالة عند تغيّر الرابط
             await MainActor.run {
                 image = nil
                 isLoading = true
@@ -362,26 +451,22 @@ struct CachedAsyncImage: View {
         config.httpCookieAcceptPolicy = .always
         let session = URLSession(configuration: config)
 
-        // جلب كوكيز Cloudflare من WKWebView وإضافتها للطلب
         let wkCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
                 continuation.resume(returning: cookies)
             }
         }
 
-        // دمج كوكيز WKWebView مع HTTPCookieStorage
         for cookie in wkCookies {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
 
-        // بناء cookie header شامل
         let allCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
         let wkFiltered = wkCookies.filter { wk in !allCookies.contains(where: { $0.name == wk.name }) }
         let cookieHeader = (allCookies + wkFiltered)
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        // تحديد الـ Referer الصحيح بناءً على الـ URL
         let referer = url.absoluteString.contains("lekstorm") ?
             "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
