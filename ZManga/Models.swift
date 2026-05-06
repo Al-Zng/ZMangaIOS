@@ -237,12 +237,12 @@ struct CloudflareChallenge: Identifiable {
 
 // MARK: - AppStore (مُعدّل للعمل مع Cloudflare بشكل صحيح)
 class AppStore: ObservableObject {
-    static var currentStore: AppStore?                     // <-- تم حذف weak
+    static var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
     @Published var completed: [Manga] = []
-    @Published var activeChallenge: CloudflareChallenge? = nil   // <-- جديد
+    @Published var activeChallenge: CloudflareChallenge? = nil
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
     @Published var cachedLatest: [Manga]?
@@ -318,7 +318,7 @@ class AppStore: ObservableObject {
     func triggerReload() { reloadTrigger += 1 }
 }
 
-// MARK: - Design Tokens (بدون تغيير)
+// MARK: - Design Tokens (النسخة العربية الذهبية)
 struct ZTheme {
     static let bg       = Color(hex: "#0D0D0D")
     static let surface  = Color(hex: "#161616")
@@ -358,7 +358,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (بدون تغيير)
+// MARK: - Cached Async Image (مع Referer ديناميكي وإعادة المحاولة)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -435,8 +435,19 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        let referer = url.absoluteString.contains("lekstorm") ?
-            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
+        // Referer ديناميكي يعتمد على host الفعلي للصورة
+        let referer: String
+        if let host = url.host {
+            let components = host.components(separatedBy: ".")
+            if components.count >= 2 {
+                let mainDomain = components.suffix(2).joined(separator: ".")
+                referer = "https://\(mainDomain)/"
+            } else {
+                referer = "https://\(host)/"
+            }
+        } else {
+            referer = "https://lekmanga.site/"
+        }
 
         for _ in 0..<3 {
             attempt += 1
