@@ -4,6 +4,7 @@ import WebKit
 // MARK: - Cloudflare Challenge Sheet
 struct CloudflareSheet: View {
     @EnvironmentObject var store: AppStore
+    let url: URL
     let onDismiss: () -> Void
 
     var body: some View {
@@ -35,13 +36,11 @@ struct CloudflareSheet: View {
 
                     Divider().background(ZTheme.border)
 
-                    if let url = store.cloudflareURL {
-                        CloudflareWebViewRepresentable(url: url) {
-                            store.cookiesReady = true
-                            store.showCloudflareSheet = false
-                            store.triggerReload()
-                            onDismiss()
-                        }
+                    CloudflareWebViewRepresentable(url: url) {
+                        store.cookiesReady = true
+                        store.activeChallenge = nil
+                        store.triggerReload()
+                        onDismiss()
                     }
                 }
             }
@@ -49,20 +48,19 @@ struct CloudflareSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
-                        store.showCloudflareSheet = false
+                        store.activeChallenge = nil
                     }
                     .foregroundColor(ZTheme.accent)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        // نسخ جميع الكوكيز فوراً
                         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
                             for cookie in cookies {
                                 HTTPCookieStorage.shared.setCookie(cookie)
                             }
                             DispatchQueue.main.async {
                                 store.cookiesReady = true
-                                store.showCloudflareSheet = false
+                                store.activeChallenge = nil
                                 store.triggerReload()
                                 onDismiss()
                             }
@@ -75,7 +73,7 @@ struct CloudflareSheet: View {
     }
 }
 
-// MARK: - WebView Representable
+// MARK: - WebView Representable (بدون تغيير)
 struct CloudflareWebViewRepresentable: UIViewRepresentable {
     let url: URL
     let onSuccess: () -> Void
