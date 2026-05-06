@@ -60,8 +60,9 @@ struct ContentView: View {
         .onAppear {
             AppStore.currentStore = store
         }
-        .sheet(isPresented: $store.showCloudflareSheet) {
-            CloudflareSheet {}.environmentObject(store)
+        .sheet(item: $store.activeChallenge) { challenge in
+            CloudflareSheet(url: challenge.url) {}
+                .environmentObject(store)
         }
     }
 }
