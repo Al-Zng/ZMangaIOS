@@ -226,39 +226,81 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (يدعم البنية الجديدة بدون class مميز)
+// MARK: - Parse Chapter Pages (نسخة شاملة لجميع الهياكل)
 
-    private func parseChapterPages(html: String) -> [String] {
-        var pages: [String] = []
-        let ns = html as NSString
+private func parseChapterPages(html: String) -> [String] {
+    var pages: [String] = []
+    let ns = html as NSString
 
-        let patterns = [
-            // البيانات قد تكون بدون class، فقط صور داخل page-break
-            #"<div[^>]+class="[^"]*page-break[^"]*"[^>]*>\s*<img[^>]+data-src="([^"]+)"[^>]*>"#,
-            #"<div[^>]+class="[^"]*page-break[^"]*"[^>]*>\s*<img[^>]+src="([^"]+)"[^>]*>"#,
-            // أي صورة في الصفحة (كآخر حل)
-            #"<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>"#
-        ]
-
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else { continue }
-            regex.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
-                guard let match = match, match.numberOfRanges >= 2 else { return }
-                let url = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if isValidImageURL(url) && !pages.contains(url) { pages.append(url) }
+    // الخطوة 1: استخراج كل روابط الصور من الصفحة (src و data-src)
+    var allImageURLs: [String] = []
+    let imgTagPattern = #"<img[^>]+(?:src|data-src)\s*=\s*"([^"]+)"[^>]*>"#
+    if let imgRegex = try? NSRegularExpression(pattern: imgTagPattern,
+                                               options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+        imgRegex.enumerateMatches(in: html,
+                                  range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match = match, match.numberOfRanges >= 2 else { return }
+            let url = ns.substring(with: match.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !allImageURLs.contains(url) {
+                allImageURLs.append(url)
             }
-            if !pages.isEmpty { break }
         }
-
-        return pages
     }
 
-    private func isValidImageURL(_ url: String) -> Bool {
-        guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
-        let lower = url.lowercased()
-        if lower.contains("lekmanga.png") || lower.contains("-512.png") || lower.contains("/favicon") { return false }
-        return lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") || lower.contains(".webp")
+    // الخطوة 2: فلترة الروابط
+    for url in allImageURLs {
+        if isValidChapterImageURL(url) && !pages.contains(url) {
+            pages.append(url)
+        }
     }
+
+    // الخطوة 3: نمط احتياطي أوسع
+    if pages.isEmpty {
+        let fallbackPattern = #"(?:src|data-src)\s*=\s*"([^"]+\.(?:jpg|jpeg|png|webp))""#
+        if let fbRegex = try? NSRegularExpression(pattern: fallbackPattern,
+                                                  options: [.caseInsensitive]) {
+            fbRegex.enumerateMatches(in: html,
+                                     range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+                guard let match = match, match.numberOfRanges >= 2 else { return }
+                let url = ns.substring(with: match.range(at: 1))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if isValidChapterImageURL(url) && !pages.contains(url) {
+                    pages.append(url)
+                }
+            }
+        }
+    }
+
+    return pages
+}
+
+// دالة مساعدة للتحقق من صلاحية رابط صورة الفصل
+private func isValidChapterImageURL(_ url: String) -> Bool {
+    guard url.hasPrefix("http"), !url.contains("data:image") else { return false }
+    let lower = url.lowercased()
+
+    // استبعاد الشعارات والأيقونات
+    if lower.contains("lekmanga.png") ||
+       lower.contains("-512.png") ||
+       lower.contains("-192x192.png") ||
+       lower.contains("-32x32.png") ||
+       lower.contains("-150x150.png") ||
+       lower.contains("/favicon") ||
+       lower.contains("logo") ||
+       lower.contains("/icon-") {
+        return false
+    }
+
+    // استبعاد الصور الوهمية
+    if lower.contains("-1x1") || lower.contains("blank") || lower.contains("placeholder") {
+        return false
+    }
+
+    // يجب أن ينتهي بامتداد صورة معروف
+    let validExtensions = [".jpg", ".jpeg", ".png", ".webp"]
+    return validExtensions.contains(where: { lower.hasSuffix($0) || lower.contains($0 + "?") })
+}
 
     // MARK: - Helpers
 
