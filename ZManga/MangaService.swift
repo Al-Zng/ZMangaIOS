@@ -125,9 +125,11 @@ class MangaService: NSObject, ObservableObject {
         let title = firstCapture(pattern: #"<h3[^>]*>\s*<a[^>]*>([^<]+)</a>"#, in: block)
                  ?? firstCapture(pattern: #"<h5[^>]*>\s*<a[^>]*>([^<]+)</a>"#, in: block)
                  ?? slug.replacingOccurrences(of: "-", with: " ").capitalized
-        let cover = firstCapture(pattern: #"<img[^>]+class="[^"]*img-responsive[^"]*"[^>]+data-src="([^"]+)"[^>]*>"#, in: block)
-                 ?? firstCapture(pattern: #"<img[^>]+class="[^"]*img-responsive[^"]*"[^>]+src="([^"]+)"[^>]*>"#, in: block)
-                 ?? ""
+
+        // استخراج كل وسوم img في البطاقة
+        let allImgTags = extractHTMLTags(named: "img", from: block)
+        // البحث عن رابط الصورة: data-src أولاً، ثم src
+        let cover = extractImageURL(from: allImgTags) ?? ""
         if slug.isEmpty || slug == "feed" || isLogoOnly(cover) { return nil }
         return Manga(slug: slug, title: htmlDecode(title), coverURL: cover)
     }
@@ -143,8 +145,8 @@ class MangaService: NSObject, ObservableObject {
             let rawTitle = nsHtml.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !slug.isEmpty, !rawTitle.isEmpty, rawTitle.count < 200, slug != "feed", !slug.contains("cdn-cgi") else { return }
             if !results.contains(where: { $0.slug == slug }) {
-                let cover = firstCapture(pattern: #"<img[^>]+data-src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html)
-                         ?? firstCapture(pattern: #"<img[^>]+src="([^"]+(?:\.jpg|\.png|\.webp)[^"]*)"[^>]*>"#, in: html) ?? ""
+                let allImgTags = extractHTMLTags(named: "img", from: html)
+                let cover = extractImageURL(from: allImgTags) ?? ""
                 var manga = Manga(slug: slug, title: htmlDecode(rawTitle), coverURL: isLogoOnly(cover) ? "" : cover)
                 if extractChapterInfo {
                     let info = parseLatestChapterInfo(from: nsHtml.substring(with: match.range))
@@ -167,8 +169,11 @@ class MangaService: NSObject, ObservableObject {
 
     private func parseMangaDetail(html: String, slug: String) -> Manga {
         let title = firstCapture(pattern: #"<div class="post-title"[^>]*>\s*<h1[^>]*>\s*([^<]+)"#, in: html)
-        let cover = firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+data-src="([^"]+)"#, in: html)
-                 ?? firstCapture(pattern: #"class="summary_image"[^>]*>.*?<img[^>]+src="([^"]+)"#, in: html) ?? ""
+        // استخدام الدالة المشتركة لاستخراج الصور
+        let summaryBlock = firstCapture(pattern: #"(<div class="summary_image[^"]*">.*?</div>)"#, in: html) ?? html
+        let allImgTags = extractHTMLTags(named: "img", from: summaryBlock)
+        let cover = extractImageURL(from: allImgTags) ?? ""
+
         let description: String = {
             if let raw = firstCapture(pattern: #"<div class="summary__content[^"]*">(.*?)</div>"#, in: html) {
                 return stripHTML(raw).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -222,34 +227,28 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (حل جذري لمشكلة ترتيب السمات)
+    // MARK: - Parse Chapter Pages (استخراج مرن: data-src أولاً، ثم src)
 
     private func parseChapterPages(html: String) -> [String] {
         var pages: [String] = []
         let ns = html as NSString
 
-        // الخطوة 1: البحث عن جميع وسوم img التي تحتوي على "wp-manga-chapter-img" بأي ترتيب
-        let tagPattern = #"<img[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#
-        guard let tagRegex = try? NSRegularExpression(pattern: tagPattern,
-                                                      options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
-            return pages
+        // حصر البحث داخل محتوى reading-content إن أمكن
+        var content = html
+        let containerPattern = #"<div[^>]+class="[^"]*reading-content[^"]*"[^>]*>(.*?)</div>"#
+        if let containerRegex = try? NSRegularExpression(pattern: containerPattern,
+                                                         options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            if let firstMatch = containerRegex.firstMatch(in: html, range: NSRange(location: 0, length: ns.length)) {
+                content = ns.substring(with: firstMatch.range(at: 1))
+            }
         }
 
-        let matches = tagRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        // جمع كل وسوم الصور
+        let tags = extractHTMLTags(named: "img", from: content)
 
-        // الخطوة 2: من كل وسم img مستخرج، نستخرج قيمة src
-        let srcPattern = #"src="([^"]+)""#
-        guard let srcRegex = try? NSRegularExpression(pattern: srcPattern,
-                                                      options: [.caseInsensitive]) else {
-            return pages
-        }
-
-        for match in matches {
-            let imgTag = ns.substring(with: match.range)
-            if let srcMatch = srcRegex.firstMatch(in: imgTag,
-                                                  range: NSRange(location: 0, length: imgTag.utf16.count)) {
-                let url = (imgTag as NSString).substring(with: srcMatch.range(at: 1))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+        // استخراج الروابط مع تفضيل data-src
+        for tag in tags {
+            if let url = extractImageURL(from: [tag]) {
                 if url.hasPrefix("http") && !pages.contains(url) {
                     pages.append(url)
                 }
@@ -257,6 +256,38 @@ class MangaService: NSObject, ObservableObject {
         }
 
         return pages
+    }
+
+    // MARK: - دوال مساعدة لاستخراج الصور بشكل مرن
+
+    /// تستخرج جميع وسوم HTML لاسم معين (مثل img) من نص معين
+    private func extractHTMLTags(named tagName: String, from html: String) -> [String] {
+        let pattern = "<\(tagName)\\s[^>]*>"
+        guard let regex = try? NSRegularExpression(pattern: pattern,
+                                                   options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
+            return []
+        }
+        let ns = html as NSString
+        return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).map {
+            ns.substring(with: $0.range)
+        }
+    }
+
+    /// تستخرج رابط الصورة من مجموعة وسوم (تفضل data-src ثم src)
+    private func extractImageURL(from tags: [String]) -> String? {
+        for tag in tags {
+            // data-src أولاً
+            if let dataSrc = firstCapture(pattern: #"data-src\s*=\s*"([^"]+)""#, in: tag) {
+                let url = dataSrc.trimmingCharacters(in: .whitespacesAndNewlines)
+                if url.hasPrefix("http") { return url }
+            }
+            // ثم src
+            if let src = firstCapture(pattern: #"src\s*=\s*"([^"]+)""#, in: tag) {
+                let url = src.trimmingCharacters(in: .whitespacesAndNewlines)
+                if url.hasPrefix("http") && !isLogoOnly(url) { return url }
+            }
+        }
+        return nil
     }
 
     // MARK: - Helpers
