@@ -39,6 +39,13 @@ struct HomeView: View {
             .navigationBarHidden(true)
         }
         .task {
+            // تحميل المخبأ أولاً ثم الجديد
+            if let cachedLatest = store.cachedLatest, !cachedLatest.isEmpty {
+                latestManga = cachedLatest
+            }
+            if let cachedPopular = store.cachedPopular, !cachedPopular.isEmpty {
+                popularManga = cachedPopular
+            }
             await loadLatest(reset: false)
             await loadPopular()
         }
@@ -68,6 +75,11 @@ struct HomeView: View {
                     .tracking(1.2)
             }
             Spacer()
+            NavigationLink(destination: SettingsView()) {
+                Image(systemName: "gearshape.fill")
+                    .foregroundColor(ZTheme.textSecondary)
+                    .font(.title3)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -128,7 +140,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Latest (تجنب القفز بعدم مسح المصفوفة)
+    // MARK: - Latest
     var latestSection: some View {
         Group {
             if latestManga.isEmpty && isLoadingLatest {
@@ -171,7 +183,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Fetch Logic (لا تمسح البيانات عند التحديث)
+    // MARK: - Fetch Logic
     func loadLatest(reset: Bool = false) async {
         if reset {
             await MainActor.run {
@@ -190,6 +202,7 @@ struct HomeView: View {
                 } else {
                     latestManga.append(contentsOf: items)
                 }
+                store.saveCachedLatest(latestManga)
                 isLoadingLatest = false
             }
         } catch {
@@ -206,6 +219,7 @@ struct HomeView: View {
             let items = try await MangaService.shared.fetchLatest(page: latestPage)
             await MainActor.run {
                 latestManga = old + items
+                store.saveCachedLatest(latestManga)
                 loadingMoreLatest = false
             }
         } catch {
@@ -221,6 +235,7 @@ struct HomeView: View {
             let items = try await MangaService.shared.fetchPopular()
             await MainActor.run {
                 popularManga = items
+                store.saveCachedPopular(items)
                 isLoadingPopular = false
             }
         } catch {
@@ -229,69 +244,7 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Latest Update Row
-struct LatestUpdateRow: View {
-    let manga: Manga
-
-    var body: some View {
-        HStack(spacing: 12) {
-            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
-                .frame(width: 80, height: 110)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(manga.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(ZTheme.textPrimary)
-                    .lineLimit(2)
-
-                if let chapter = manga.latestChapterNumber {
-                    Text("Chapter \(chapter)")
-                        .font(.system(size: 12))
-                        .foregroundColor(ZTheme.accent)
-                }
-
-                if let time = manga.lastUpdated {
-                    Text(time)
-                        .font(.system(size: 11))
-                        .foregroundColor(ZTheme.textTertiary)
-                }
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(ZTheme.textTertiary)
-        }
-        .padding(12)
-        .background(ZTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-    }
-}
-
-// MARK: - Popular Card
-struct PopularCard: View {
-    let manga: Manga
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
-                .frame(width: 120, height: 168)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-
-            Text(manga.title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(ZTheme.textPrimary)
-                .lineLimit(2)
-                .frame(width: 120, alignment: .leading)
-        }
-        .frame(width: 120)
-    }
-}
-
-// MARK: - Continue Reading Card
+// MARK: - Continuing Reading Card
 struct ContinueReadingCard: View {
     let progress: ReadingProgress
 
@@ -330,7 +283,61 @@ struct ContinueReadingCard: View {
     }
 }
 
-// MARK: - Skeleton Cards
+// MARK: - Latest & Popular Cards (unchanged from original but included for completeness)
+struct LatestUpdateRow: View {
+    let manga: Manga
+    var body: some View {
+        HStack(spacing: 12) {
+            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                .frame(width: 80, height: 110)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(manga.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(ZTheme.textPrimary)
+                    .lineLimit(2)
+                if let chapter = manga.latestChapterNumber {
+                    Text("Chapter \(chapter)")
+                        .font(.system(size: 12))
+                        .foregroundColor(ZTheme.accent)
+                }
+                if let time = manga.lastUpdated {
+                    Text(time)
+                        .font(.system(size: 11))
+                        .foregroundColor(ZTheme.textTertiary)
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(ZTheme.textTertiary)
+        }
+        .padding(12)
+        .background(ZTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+    }
+}
+
+struct PopularCard: View {
+    let manga: Manga
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                .frame(width: 120, height: 168)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+            Text(manga.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(ZTheme.textPrimary)
+                .lineLimit(2)
+                .frame(width: 120, alignment: .leading)
+        }
+        .frame(width: 120)
+    }
+}
+
 struct SkeletonPopularCard: View {
     @State private var shimmer = false
     var body: some View {
@@ -345,9 +352,7 @@ struct SkeletonPopularCard: View {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             )
-            .onAppear {
-                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { shimmer = true }
-            }
+            .onAppear { withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { shimmer = true } }
     }
 }
 
@@ -355,9 +360,7 @@ struct SkeletonLatestRow: View {
     @State private var shimmer = false
     var body: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(ZTheme.card)
-                .frame(width: 80, height: 110)
+            RoundedRectangle(cornerRadius: 12).fill(ZTheme.card).frame(width: 80, height: 110)
             VStack(alignment: .leading, spacing: 8) {
                 RoundedRectangle(cornerRadius: 4).fill(ZTheme.card).frame(height: 12)
                 RoundedRectangle(cornerRadius: 4).fill(ZTheme.card).frame(width: 140, height: 12)
@@ -376,8 +379,6 @@ struct SkeletonLatestRow: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 12))
         )
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { shimmer = true }
-        }
+        .onAppear { withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { shimmer = true } }
     }
 }
