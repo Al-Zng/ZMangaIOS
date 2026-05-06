@@ -229,6 +229,12 @@ class DownloadManager: ObservableObject {
     }
 }
 
+// MARK: - Cloudflare Challenge (يدعم Identifiable)
+struct CloudflareChallenge: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 // MARK: - AppStore (مع كاش المانجا)
 class AppStore: ObservableObject {
     static weak var currentStore: AppStore?
@@ -236,8 +242,7 @@ class AppStore: ObservableObject {
     @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
     @Published var completed: [Manga] = []
-    @Published var showCloudflareSheet = false
-    @Published var cloudflareURL: URL?
+    @Published var activeChallenge: CloudflareChallenge? = nil
     @Published var cookiesReady = false
     @Published var reloadTrigger = 0
     @Published var cachedLatest: [Manga]?
@@ -306,11 +311,10 @@ class AppStore: ObservableObject {
     private func persistMangaCache() { UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey) }
     private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
-    // MARK: - Cloudflare
+    // MARK: - Cloudflare (معدّلة)
     func triggerCloudflare(url: URL) {
         Logger.shared.log("Cloudflare triggered for URL: \(url.absoluteString)", category: "Cloudflare")
-        cloudflareURL = url
-        showCloudflareSheet = true
+        activeChallenge = CloudflareChallenge(url: url)
     }
     func triggerReload() { reloadTrigger += 1 }
 }
