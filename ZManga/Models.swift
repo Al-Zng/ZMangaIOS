@@ -92,7 +92,7 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager (مع غلاف وحجم)
+// MARK: - Download Manager
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
@@ -167,13 +167,9 @@ class DownloadManager: ObservableObject {
         }
 
         let downloaded = DownloadedChapter(
-            mangaSlug: manga.slug,
-            chapterSlug: chapter.slug,
-            chapterNumber: chapter.number,
-            mangaTitle: manga.title,
-            mangaCover: manga.coverURL,
-            pages: localPaths,
-            downloadedAt: Date()
+            mangaSlug: manga.slug, chapterSlug: chapter.slug,
+            chapterNumber: chapter.number, mangaTitle: manga.title,
+            mangaCover: manga.coverURL, pages: localPaths, downloadedAt: Date()
         )
         downloads[key] = downloaded
         activeDownloads.removeValue(forKey: key)
@@ -235,9 +231,9 @@ struct CloudflareChallenge: Identifiable {
     let url: URL
 }
 
-// MARK: - AppStore (مع كاش المانجا)
+// MARK: - AppStore
 class AppStore: ObservableObject {
-    static var currentStore: AppStore?     // تم حذف weak
+    static var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
@@ -311,7 +307,7 @@ class AppStore: ObservableObject {
     private func persistMangaCache() { UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey) }
     private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
-    // MARK: - Cloudflare (معدّلة)
+    // MARK: - Cloudflare
     func triggerCloudflare(url: URL) {
         Logger.shared.log("Cloudflare triggered for URL: \(url.absoluteString)", category: "Cloudflare")
         activeChallenge = CloudflareChallenge(url: url)
@@ -359,7 +355,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (مع Logger)
+// MARK: - Cached Async Image
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
