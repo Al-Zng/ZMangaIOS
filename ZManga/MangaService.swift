@@ -90,73 +90,76 @@ class MangaService: NSObject, ObservableObject {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         Logger.shared.log("Fetching chapter with lazy loading: \(urlString)", category: "ChapterPages")
 
-        // المرحلة 1: تحميل الصفحة
         let html = try await fetchHTML(urlString: urlString)
 
-        // إذا لم نجد chapter_id، نحاول انتظار الصور البطيئة
+        // إذا لم نجد chapter_id، نرجع HTML مباشرة
         guard firstCapture(pattern: #"id="wp-manga-current-chap"[^>]+data-id="(\d+)""#, in: html) != nil else {
-            // لا chapter_id، سنأخذ الـ HTML كما هو (قد لا يحتوي على صور)
             return html
         }
 
-        // المرحلة 2: إنشاء WebView جديد لانتظار الصور
+        // نصوص انتظار الصور
+        let waitJS = """
+        new Promise((resolve) => {
+            let attempts = 0;
+            const check = () => {
+                attempts++;
+                const imgs = document.querySelectorAll('.reading-content img');
+                const hasRealSrc = Array.from(imgs).some(img => {
+                    const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
+                    return src.startsWith('http') && !src.includes('data:image');
+                });
+                if (hasRealSrc || attempts >= 30) resolve(attempts);
+                else setTimeout(check, 300);
+            };
+            setTimeout(check, 800);
+        });
+        """
+
         return try await withCheckedThrowingContinuation { continuation in
             let config = WKWebViewConfiguration()
             config.websiteDataStore = WKWebsiteDataStore.default()
             let webView = WKWebView(frame: .zero, configuration: config)
             webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-
-            let waitJS = """
-            new Promise((resolve) => {
-                let attempts = 0;
-                const check = () => {
-                    attempts++;
-                    const imgs = document.querySelectorAll('.reading-content img');
-                    const hasRealSrc = Array.from(imgs).some(img => {
-                        const src = img.dataset.lazySrc || img.dataset.src || img.getAttribute('data-lazy-src') || img.src || '';
-                        return src.startsWith('http') && !src.includes('data:image');
-                    });
-                    if (hasRealSrc || attempts >= 30) resolve(attempts);
-                    else setTimeout(check, 300);
-                };
-                setTimeout(check, 800);
-            });
-            """
-
-            class LazyDelegate: NSObject, WKNavigationDelegate {
-                let continuation: CheckedContinuation<String, Error>
-                init(continuation: CheckedContinuation<String, Error>) {
-                    self.continuation = continuation
-                }
-                func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-                    // انتظر حتى تظهر الصور
-                    webView.evaluateJavaScript(waitJS) { [weak self] _, _ in
-                        // ثم استخلص HTML
-                        webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
-                            guard let self = self else { return }
-                            if let html = result as? String {
-                                self.continuation.resume(returning: html)
-                            } else {
-                                self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                            }
-                        }
-                    }
-                }
-                func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-                    continuation.resume(throwing: error)
-                }
-                func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-                    continuation.resume(throwing: error)
-                }
-            }
-
-            let delegate = LazyDelegate(continuation: continuation)
+            let delegate = LazyDelegate(continuation: continuation, waitJS: waitJS)
             webView.navigationDelegate = delegate
             objc_setAssociatedObject(webView, "lazyDelegate", delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
             webView.load(request)
+        }
+    }
+
+    // MARK: - Lazy Delegate (لا يحتاج إلى إغلاق خارجي)
+    private class LazyDelegate: NSObject, WKNavigationDelegate {
+        let continuation: CheckedContinuation<String, Error>
+        let waitJS: String
+
+        init(continuation: CheckedContinuation<String, Error>, waitJS: String) {
+            self.continuation = continuation
+            self.waitJS = waitJS
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            webView.evaluateJavaScript(waitJS) { [weak self] _, _ in
+                guard let self = self else { return }
+                webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
+                    if let html = result as? String {
+                        self.continuation.resume(returning: html)
+                    } else {
+                        self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                    }
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            continuation.resume(throwing: error)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            continuation.resume(throwing: error)
         }
     }
 
@@ -199,7 +202,7 @@ class MangaService: NSObject, ObservableObject {
             }
         }
 
-        // 2. انتظار الصور البطيئة (lazy loading) عبر WebView جديد
+        // 2. انتظار الصور البطيئة (lazy loading)
         Logger.shared.log("Attempting lazy image loading for chapter...", category: "ChapterPages")
         do {
             let updatedHTML = try await fetchChapterHTMLWithLazyImages(urlString: url)
@@ -208,7 +211,6 @@ class MangaService: NSObject, ObservableObject {
             return pages
         } catch {
             Logger.shared.log("Lazy loading failed: \(error.localizedDescription)", category: "ChapterPages")
-            // محاولة أخيرة على الـ HTML الأصلي
             return parseChapterPages(html: html)
         }
     }
