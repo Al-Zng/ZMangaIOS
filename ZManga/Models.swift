@@ -300,7 +300,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image (مع Referer وإعادة المحاولة)
+// MARK: - Cached Async Image (مع Referer وإعادة المحاولة) - تم تعديل إعادة التعيين
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -335,7 +335,16 @@ struct CachedAsyncImage: View {
                     )
             }
         }
-        .task(id: url?.absoluteString) { await loadImage() }
+        .task(id: url?.absoluteString) {
+            // إعادة تعيين الحالة عند تغيّر الرابط أو عند أول تحميل
+            await MainActor.run {
+                image = nil
+                isLoading = true
+                loadFailed = false
+                attempt = 0
+            }
+            await loadImage()
+        }
     }
 
     private func loadImage() async {
