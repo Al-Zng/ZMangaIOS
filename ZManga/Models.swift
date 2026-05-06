@@ -253,14 +253,14 @@ class AppStore: ObservableObject {
     private let mangaCacheKey = "zmanga_manga_cache"
 
     init() {
-        loadHistory()
-        loadLibrary()
-        loadWantToRead()
-        loadCompleted()
-        loadCached()
-        loadMangaCache()
-    }
-
+    AppStore.currentStore = self   // ← هذا السطر المفقود
+    loadHistory()
+    loadLibrary()
+    loadWantToRead()
+    loadCompleted()
+    loadCached()
+    loadMangaCache()
+}
     // MARK: - History
     func saveProgress(_ progress: ReadingProgress) {
         history.removeAll { $0.mangaSlug == progress.mangaSlug }
