@@ -329,26 +329,29 @@ class MangaService: NSObject, ObservableObject {
         var pages: [String] = []
         let content = extractReadingContent(html: html)
 
-        let patterns: [(String, NSRegularExpression.Options)] = [
-            (#"<img[^>]+data-lazy-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+data-src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*data-src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+src="([^"]+)"[^>]*class="[^"]*wp-manga-chapter-img[^"]*"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+class="[^"]*wp-manga-chapter-img[^"]*"[^>]*src="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
-            (#"<img[^>]+(?:data-src|data-lazy-src|src)="([^"]+)"[^>]*>"#, [.dotMatchesLineSeparators, .caseInsensitive]),
+        // ترتيب الأنماط: نبحث عن الروابط الحقيقية أولاً (data-src أو data-lazy-src) ثم src العادي
+        let patterns: [String] = [
+            #"<img[^>]+(?:data-src|data-lazy-src)\s*=\s*"([^"]+)""#,
+            #"<img[^>]+src\s*=\s*"([^"]+)""#
         ]
 
-        for (pattern, options) in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { continue }
-            let c = content as NSString
-            regex.enumerateMatches(in: content, range: NSRange(location: 0, length: c.length)) { match, _, _ in
+        let nsContent = content as NSString
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            regex.enumerateMatches(in: content, range: NSRange(location: 0, length: nsContent.length)) { match, _, _ in
                 guard let match = match, match.numberOfRanges >= 2 else { return }
-                let url = c.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if url.hasPrefix("http") && !isLogoOnly(url) && !pages.contains(url) {
+                let url = nsContent.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                // تصفية الروابط غير الصالحة أو الصور الصغيرة/اللوجو
+                if url.hasPrefix("http") && 
+                   !url.contains("data:image") && 
+                   !isLogoOnly(url) && 
+                   !pages.contains(url) {
                     pages.append(url)
                 }
             }
-            if !pages.isEmpty { break }
+            // إذا وجدنا عدداً معقولاً من الصور (مثلاً أكثر من 5)، نكتفي بهذا النمط
+            if pages.count > 5 { break }
         }
 
         return pages

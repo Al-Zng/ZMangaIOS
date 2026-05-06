@@ -428,11 +428,18 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        let referer = url.absoluteString.contains("lekstorm") ?
-            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
+        // تحديد الـ Referer بناءً على النطاق الفرعي للصور
+        let urlHost = url.host ?? ""
+        let referer: String
+        if urlHost.contains("lekmanga.site") {
+            referer = "https://lekmanga.site/"
+        } else {
+            // لضمان عمل الصور من سيرفرات مختلفة
+            referer = "https://lekmanga.site/"
+        }
 
-        for _ in 0..<3 {
-            attempt += 1
+        for i in 0..<3 {
+            attempt = i + 1
             var request = URLRequest(url: url)
             request.setValue(referer, forHTTPHeaderField: "Referer")
             request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
@@ -440,20 +447,29 @@ struct CachedAsyncImage: View {
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
                 forHTTPHeaderField: "User-Agent"
             )
+            
+            // إضافة الكوكيز للطلب إذا كانت متوفرة
             if !cookieHeader.isEmpty {
                 request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
             }
+            
             do {
                 let (data, response) = try await session.data(for: request)
-                if let httpResp = response as? HTTPURLResponse,
-                   httpResp.statusCode == 200,
-                   let img = UIImage(data: data),
-                   img.size.width > 0 {
-                    await MainActor.run { image = img; isLoading = false }
-                    return
+                if let httpResp = response as? HTTPURLResponse {
+                    if httpResp.statusCode == 200, let img = UIImage(data: data), img.size.width > 0 {
+                        await MainActor.run { image = img; isLoading = false }
+                        return
+                    } else if httpResp.statusCode == 403 {
+                        // محاولة تغيير الـ Referer في المحاولة القادمة إذا فشل بـ 403
+                        print("Image 403 for: \(url.absoluteString)")
+                    }
                 }
             } catch {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                print("Image load error: \(error.localizedDescription)")
+            }
+            
+            if i < 2 {
+                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * Double(i + 1)))
             }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
