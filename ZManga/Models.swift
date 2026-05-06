@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WebKit
 
 // MARK: - Manga Model
 struct Manga: Identifiable, Codable, Hashable {
@@ -347,14 +348,46 @@ struct CachedAsyncImage: View {
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
-        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForRequest = 20
+        config.httpShouldSetCookies = true
+        config.httpCookieAcceptPolicy = .always
         let session = URLSession(configuration: config)
+
+        // جلب كوكيز Cloudflare من WKWebView وإضافتها للطلب
+        let wkCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                continuation.resume(returning: cookies)
+            }
+        }
+
+        // دمج كوكيز WKWebView مع HTTPCookieStorage
+        for cookie in wkCookies {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+
+        // بناء cookie header شامل
+        let allCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        let wkFiltered = wkCookies.filter { wk in !allCookies.contains(where: { $0.name == wk.name }) }
+        let cookieHeader = (allCookies + wkFiltered)
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
+
+        // تحديد الـ Referer الصحيح بناءً على الـ URL
+        let referer = url.absoluteString.contains("lekstorm") ?
+            "https://lekstorm.lekmanga.site" : "https://lekmanga.site"
 
         for _ in 0..<3 {
             attempt += 1
             var request = URLRequest(url: url)
-            request.setValue("https://lekmanga.site", forHTTPHeaderField: "Referer")
-            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+            request.setValue(referer, forHTTPHeaderField: "Referer")
+            request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
+            request.setValue(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                forHTTPHeaderField: "User-Agent"
+            )
+            if !cookieHeader.isEmpty {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
             do {
                 let (data, response) = try await session.data(for: request)
                 if let httpResp = response as? HTTPURLResponse,
