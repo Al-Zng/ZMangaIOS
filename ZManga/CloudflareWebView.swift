@@ -4,6 +4,7 @@ import WebKit
 // MARK: - Cloudflare Challenge Sheet
 struct CloudflareSheet: View {
     @EnvironmentObject var store: AppStore
+    let url: URL
     let onDismiss: () -> Void
 
     var body: some View {
@@ -35,13 +36,11 @@ struct CloudflareSheet: View {
 
                     Divider().background(ZTheme.border)
 
-                    if let url = store.cloudflareURL {
-                        CloudflareWebViewRepresentable(url: url) {
-                            store.cookiesReady = true
-                            store.showCloudflareSheet = false
-                            store.triggerReload()
-                            onDismiss()
-                        }
+                    CloudflareWebViewRepresentable(url: url) {
+                        store.cookiesReady = true
+                        store.activeChallenge = nil
+                        store.triggerReload()
+                        onDismiss()
                     }
                 }
             }
@@ -50,7 +49,7 @@ struct CloudflareSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         Logger.shared.log("Cloudflare sheet cancelled by user.", category: "Cloudflare")
-                        store.showCloudflareSheet = false
+                        store.activeChallenge = nil
                     }
                     .foregroundColor(ZTheme.accent)
                 }
@@ -63,7 +62,7 @@ struct CloudflareSheet: View {
                             DispatchQueue.main.async {
                                 Logger.shared.log("Cloudflare challenge completed manually. Cookies copied.", category: "Cloudflare")
                                 store.cookiesReady = true
-                                store.showCloudflareSheet = false
+                                store.activeChallenge = nil
                                 store.triggerReload()
                                 onDismiss()
                             }
