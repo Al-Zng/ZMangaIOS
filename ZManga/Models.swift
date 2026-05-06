@@ -237,7 +237,7 @@ struct CloudflareChallenge: Identifiable {
 
 // MARK: - AppStore (مع كاش المانجا)
 class AppStore: ObservableObject {
-    static weak var currentStore: AppStore?
+    static var currentStore: AppStore?     // تم حذف weak
     @Published var history: [ReadingProgress] = []
     @Published var library: [Manga] = []
     @Published var wantToRead: [Manga] = []
