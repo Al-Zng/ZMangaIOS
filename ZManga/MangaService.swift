@@ -19,37 +19,64 @@ class MangaService: NSObject, ObservableObject {
         return wv
     }
 
+    // MARK: - Navigation Delegate لـ fetchHTML
+    private class FetchNavDelegate: NSObject, WKNavigationDelegate {
+        private let continuation: CheckedContinuation<String, Error>
+        private let url: URL
+        private var finished = false
+
+        init(continuation: CheckedContinuation<String, Error>, url: URL) {
+            self.continuation = continuation
+            self.url = url
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard !finished else { return }
+            finished = true
+            webView.navigationDelegate = nil
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] result, error in
+                guard let self = self else { return }
+                if let html = result as? String {
+                    if html.contains("Just a moment") ||
+                       html.contains("cf-browser-verification") ||
+                       html.contains("Checking your browser") ||
+                       html.contains("Attention Required") {
+                        AppStore.currentStore?.triggerCloudflare(url: self.url)
+                        self.continuation.resume(throwing: ZMangaError.cloudflareChallenge)
+                    } else {
+                        self.continuation.resume(returning: html)
+                    }
+                } else {
+                    self.continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            guard !finished else { return }
+            finished = true
+            webView.navigationDelegate = nil
+            continuation.resume(throwing: error)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            guard !finished else { return }
+            finished = true
+            webView.navigationDelegate = nil
+            continuation.resume(throwing: error)
+        }
+    }
+
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         let webView = getWebView()
-
-        // إلغاء أي تحميل سابق لمنع التداخل بين الطلبات
         webView.stopLoading()
 
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            var observation: NSKeyValueObservation?
-            observation = webView.observe(\.isLoading, options: [.initial, .new]) { _, change in
-                guard let newValue = change.newValue else { return }
-                // نتأكد أن التحميل بدأ (true) ثم انتهى (false)
-                if !newValue && change.oldValue == true {
-                    observation?.invalidate()
-                    webView.evaluateJavaScript("document.documentElement.outerHTML") { result, error in
-                        if let html = result as? String {
-                            if html.contains("Just a moment") ||
-                               html.contains("cf-browser-verification") ||
-                               html.contains("Checking your browser") ||
-                               html.contains("Attention Required") {
-                                AppStore.currentStore?.triggerCloudflare(url: url)
-                                continuation.resume(throwing: ZMangaError.cloudflareChallenge)
-                            } else {
-                                continuation.resume(returning: html)
-                            }
-                        } else {
-                            continuation.resume(throwing: error ?? URLError(.cannotDecodeContentData))
-                        }
-                    }
-                }
-            }
+            let delegate = FetchNavDelegate(continuation: continuation, url: url)
+            webView.navigationDelegate = delegate
+            // نحتفظ بـ delegate في الـ webView حتى ما يُحذف قبل اكتمال التحميل
+            objc_setAssociatedObject(webView, "fetchDelegate", delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
