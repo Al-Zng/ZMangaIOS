@@ -6,6 +6,7 @@
   objectVersion = 52;
   objects = {
 
+    /* ---------- Build Files ---------- */
     AA000001 /* ZMangaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000004; };
     AA000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000005; };
     AA000003 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000013; };
@@ -17,7 +18,9 @@
     AA000024 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000025; };
     AA000026 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000027; };
     AA000028 /* CloudflareWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000029; };
+    AA000031 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000030; };
 
+    /* ---------- File References ---------- */
     AA000004 /* ZMangaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZMangaApp.swift; path = ZManga/ZMangaApp.swift; sourceTree = "<group>"; };
     AA000005 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = ZManga/ContentView.swift; sourceTree = "<group>"; };
     AA000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = ZManga/Info.plist; sourceTree = "<group>"; };
@@ -31,11 +34,26 @@
     AA000025 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HistoryView.swift; path = ZManga/HistoryView.swift; sourceTree = "<group>"; };
     AA000027 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryView.swift; path = ZManga/LibraryView.swift; sourceTree = "<group>"; };
     AA000029 /* CloudflareWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CloudflareWebView.swift; path = ZManga/CloudflareWebView.swift; sourceTree = "<group>"; };
+    AA000030 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = ZManga/SettingsView.swift; sourceTree = "<group>"; };
 
+    /* ---------- Build Phases ---------- */
     AA000007 /* Sources */ = {
       isa = PBXSourcesBuildPhase;
       buildActionMask = 2147483647;
-      files = (AA000001, AA000002, AA000003, AA000014, AA000016, AA000018, AA000020, AA000022, AA000024, AA000026, AA000028);
+      files = (
+        AA000001,
+        AA000002,
+        AA000003,
+        AA000014,
+        AA000016,
+        AA000018,
+        AA000020,
+        AA000022,
+        AA000024,
+        AA000026,
+        AA000028,
+        AA000031,  /* ← SettingsView.swift added */
+      );
       runOnlyForDeploymentPostprocessing = 0;
     };
 
@@ -53,12 +71,29 @@
       runOnlyForDeploymentPostprocessing = 0;
     };
 
+    /* ---------- Main Group ---------- */
     AA000008 = {
       isa = PBXGroup;
-      children = (AA000004, AA000005, AA000013, AA000015, AA000017, AA000019, AA000021, AA000023, AA000025, AA000027, AA000029, AA000006, AA00000E);
+      children = (
+        AA000004,  /* ZMangaApp.swift */
+        AA000005,  /* ContentView.swift */
+        AA000013,  /* Models.swift */
+        AA000015,  /* MangaService.swift */
+        AA000017,  /* HomeView.swift */
+        AA000019,  /* SearchView.swift */
+        AA000021,  /* MangaDetailView.swift */
+        AA000023,  /* ReaderView.swift */
+        AA000025,  /* HistoryView.swift */
+        AA000027,  /* LibraryView.swift */
+        AA000029,  /* CloudflareWebView.swift */
+        AA000030,  /* SettingsView.swift ← added */
+        AA000006,  /* Info.plist */
+        AA00000E,  /* Products */
+      );
       sourceTree = "<group>";
     };
 
+    /* ---------- Native Target ---------- */
     AA000009 = {
       isa = PBXNativeTarget;
       buildConfigurationList = AA00000A;
@@ -71,6 +106,7 @@
       productType = "com.apple.product-type.application";
     };
 
+    /* ---------- Build Configurations ---------- */
     AA00000A = {
       isa = XCConfigurationList;
       buildConfigurations = (AA00000C, AA00000D);
@@ -109,6 +145,7 @@
       name = Release;
     };
 
+    /* ---------- Products Group ---------- */
     AA00000E = {
       isa = PBXGroup;
       children = (AA00000B);
@@ -116,6 +153,7 @@
       sourceTree = "<group>";
     };
 
+    /* ---------- Project ---------- */
     BB000001 = {
       isa = XCConfigurationList;
       buildConfigurations = (BB000002, BB000003);
