@@ -18,7 +18,7 @@ struct SettingsView: View {
                         HStack {
                             Text("Image Cache")
                             Spacer()
-                            Text(formatBytes(URLCache.shared.currentDiskUsage))
+                            Text(formatBytes(Int64(URLCache.shared.currentDiskUsage)))
                                 .foregroundColor(ZTheme.textSecondary)
                         }
                         HStack {
