@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var network: NetworkMonitor
     @State private var latestManga: [Manga] = []
     @State private var popularManga: [Manga] = []
     @State private var isLoadingLatest = false
@@ -13,41 +14,51 @@ struct HomeView: View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        headerBar.padding(.bottom, 20)
-
-                        if !store.history.isEmpty {
-                            sectionLabel("CONTINUE READING", icon: "clock.fill")
-                            continueReadingSection.padding(.bottom, 24)
-                        }
-
-                        sectionLabel("POPULAR", icon: "flame.fill")
-                        popularSection.padding(.bottom, 24)
-
-                        sectionLabel("LATEST UPDATES", icon: "bolt.fill")
-                        latestSection
-
-                        Color.clear.frame(height: 32)
+                if !network.isConnected {
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundColor(ZTheme.textTertiary)
+                        Text("No Internet Connection")
+                            .font(.system(size: 15))
+                            .foregroundColor(ZTheme.textSecondary)
+                        Spacer()
                     }
-                }
-                .refreshable {
-                    await loadLatest(reset: true)
-                    await loadPopular()
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            headerBar.padding(.bottom, 20)
+
+                            if !store.history.isEmpty {
+                                sectionLabel("CONTINUE READING", icon: "clock.fill")
+                                continueReadingSection.padding(.bottom, 24)
+                            }
+
+                            sectionLabel("POPULAR", icon: "flame.fill")
+                            popularSection.padding(.bottom, 24)
+
+                            sectionLabel("LATEST UPDATES", icon: "bolt.fill")
+                            latestSection
+
+                            Color.clear.frame(height: 32)
+                        }
+                    }
+                    .refreshable {
+                        await loadLatest(reset: true)
+                        await loadPopular()
+                    }
                 }
             }
             .navigationBarHidden(true)
         }
         .task {
-            // تحميل المخبأ أولاً ثم الجديد
-            if let cachedLatest = store.cachedLatest, !cachedLatest.isEmpty {
-                latestManga = cachedLatest
+            if let cachedLatest = store.cachedLatest, !cachedLatest.isEmpty { latestManga = cachedLatest }
+            if let cachedPopular = store.cachedPopular, !cachedPopular.isEmpty { popularManga = cachedPopular }
+            if network.isConnected {
+                await loadLatest(reset: false)
+                await loadPopular()
             }
-            if let cachedPopular = store.cachedPopular, !cachedPopular.isEmpty {
-                popularManga = cachedPopular
-            }
-            await loadLatest(reset: false)
-            await loadPopular()
         }
         .onChange(of: store.reloadTrigger) { _ in
             Task {
@@ -145,19 +156,13 @@ struct HomeView: View {
         Group {
             if latestManga.isEmpty && isLoadingLatest {
                 VStack(spacing: 12) {
-                    ForEach(0..<8, id: \.self) { _ in
-                        SkeletonLatestRow()
-                            .frame(height: 122)
-                    }
+                    ForEach(0..<8, id: \.self) { _ in SkeletonLatestRow().frame(height: 122) }
                 }
                 .padding(.horizontal, 16)
             } else {
                 VStack(spacing: 0) {
                     if isLoadingLatest {
-                        ProgressView()
-                            .tint(ZTheme.accent)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                        ProgressView().tint(ZTheme.accent).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     LazyVStack(spacing: 12) {
                         ForEach(latestManga) { manga in
@@ -176,8 +181,7 @@ struct HomeView: View {
                 .padding(.horizontal, 16)
 
                 if loadingMoreLatest {
-                    HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }
-                        .padding(.vertical, 16)
+                    HStack { Spacer(); ProgressView().tint(ZTheme.accent); Spacer() }.padding(.vertical, 16)
                 }
             }
         }
@@ -185,23 +189,12 @@ struct HomeView: View {
 
     // MARK: - Fetch Logic
     func loadLatest(reset: Bool = false) async {
-        if reset {
-            await MainActor.run {
-                latestPage = 1
-                isLoadingLatest = true
-            }
-        } else if latestManga.isEmpty {
-            await MainActor.run { isLoadingLatest = true }
-        }
-
+        if reset { await MainActor.run { latestPage = 1; isLoadingLatest = true } }
+        else if latestManga.isEmpty { await MainActor.run { isLoadingLatest = true } }
         do {
             let items = try await MangaService.shared.fetchLatest(page: latestPage)
             await MainActor.run {
-                if reset || latestManga.isEmpty {
-                    latestManga = items
-                } else {
-                    latestManga.append(contentsOf: items)
-                }
+                if reset || latestManga.isEmpty { latestManga = items } else { latestManga.append(contentsOf: items) }
                 store.saveCachedLatest(latestManga)
                 isLoadingLatest = false
             }
@@ -228,9 +221,7 @@ struct HomeView: View {
     }
 
     func loadPopular() async {
-        if popularManga.isEmpty {
-            await MainActor.run { isLoadingPopular = true }
-        }
+        if popularManga.isEmpty { await MainActor.run { isLoadingPopular = true } }
         do {
             let items = try await MangaService.shared.fetchPopular()
             await MainActor.run {
@@ -244,10 +235,9 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Continuing Reading Card
+// MARK: - Continue Reading Card
 struct ContinueReadingCard: View {
     let progress: ReadingProgress
-
     var body: some View {
         ZStack(alignment: .bottom) {
             CachedAsyncImage(url: URL(string: progress.mangaCover))
@@ -283,7 +273,26 @@ struct ContinueReadingCard: View {
     }
 }
 
-// MARK: - Latest & Popular Cards (unchanged from original but included for completeness)
+// MARK: - Popular Card
+struct PopularCard: View {
+    let manga: Manga
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
+                .frame(width: 120, height: 168)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+            Text(manga.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(ZTheme.textPrimary)
+                .lineLimit(2)
+                .frame(width: 120, alignment: .leading)
+        }
+        .frame(width: 120)
+    }
+}
+
+// MARK: - Latest Update Row
 struct LatestUpdateRow: View {
     let manga: Manga
     var body: some View {
@@ -320,24 +329,7 @@ struct LatestUpdateRow: View {
     }
 }
 
-struct PopularCard: View {
-    let manga: Manga
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
-                .frame(width: 120, height: 168)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-            Text(manga.title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(ZTheme.textPrimary)
-                .lineLimit(2)
-                .frame(width: 120, alignment: .leading)
-        }
-        .frame(width: 120)
-    }
-}
-
+// MARK: - Skeleton Cards
 struct SkeletonPopularCard: View {
     @State private var shimmer = false
     var body: some View {
