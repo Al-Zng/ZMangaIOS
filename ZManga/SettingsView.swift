@@ -3,7 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("autoLoadNextChapter") var autoLoadNextChapter = true
-    @AppStorage("preloadImagesOnBrowse") var preloadImagesOnBrowse = false
 
     var body: some View {
         NavigationView {
@@ -11,53 +10,41 @@ struct SettingsView: View {
                 ZTheme.bg.ignoresSafeArea()
                 List {
                     Section("Reading") {
-                        Toggle(isOn: $autoLoadNextChapter) {
-                            Text("Auto-load next chapter")
-                                .foregroundColor(ZTheme.textPrimary)
-                        }
-                        .tint(ZTheme.accent)
+                        Toggle("Auto-load next chapter", isOn: $autoLoadNextChapter)
+                            .tint(ZTheme.accent)
                     }
 
-                    Section("Image Cache") {
-                        Button {
+                    Section("Storage") {
+                        HStack {
+                            Text("Image Cache")
+                            Spacer()
+                            Text(formatBytes(URLCache.shared.currentDiskUsage))
+                                .foregroundColor(ZTheme.textSecondary)
+                        }
+                        HStack {
+                            Text("Downloads")
+                            Spacer()
+                            Text(formatBytes(DownloadManager.shared.downloadedSize))
+                                .foregroundColor(ZTheme.textSecondary)
+                        }
+                        Button("Clear Image Cache") {
                             URLCache.shared.removeAllCachedResponses()
-                            // Also clear CachedAsyncImage internal cache
-                            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-                            if let cacheDir = cacheDir {
+                            if let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
                                 try? FileManager.default.removeItem(at: cacheDir)
                             }
-                        } label: {
-                            HStack {
-                                Text("Clear Image Cache")
-                                    .foregroundColor(ZTheme.danger)
-                                Spacer()
-                                Image(systemName: "trash")
-                                    .foregroundColor(ZTheme.danger)
-                            }
                         }
-                    }
-
-                    Section("Downloads") {
-                        Button {
+                        .foregroundColor(ZTheme.danger)
+                        Button("Delete All Downloads") {
                             DownloadManager.shared.removeAllDownloads()
-                        } label: {
-                            HStack {
-                                Text("Delete All Downloaded Chapters")
-                                    .foregroundColor(ZTheme.danger)
-                                Spacer()
-                                Image(systemName: "trash")
-                                    .foregroundColor(ZTheme.danger)
-                            }
                         }
+                        .foregroundColor(ZTheme.danger)
                     }
 
                     Section("About") {
                         HStack {
                             Text("Version")
-                                .foregroundColor(ZTheme.textSecondary)
                             Spacer()
-                            Text("1.0")
-                                .foregroundColor(ZTheme.textTertiary)
+                            Text("1.0").foregroundColor(ZTheme.textTertiary)
                         }
                     }
                 }
@@ -68,5 +55,12 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    func formatBytes(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
     }
 }
