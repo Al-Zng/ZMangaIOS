@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchView: View {
+    @EnvironmentObject var network: NetworkMonitor
     @State private var query = ""
     @State private var results: [Manga] = []
     @State private var isLoading = false
@@ -9,33 +10,41 @@ struct SearchView: View {
     @State private var loadingMore = false
     @State private var errorMessage: String?
     @State private var searchTask: Task<Void, Never>?
-    @State private var showFilters = false
     @State private var selectedGenre: String? = nil
 
     let genres = ["درامـا", "رومانسى", "فانتازا", "أكشن", "كوميدى", "رعب", "خيال علمى", "مغامرات", "رياضة"]
-
     let columns = [GridItem(.adaptive(minimum: 110), spacing: 12)]
 
     var body: some View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    searchBar
-                    genrePills
-                    Divider().background(ZTheme.border)
-
-                    if isLoading && results.isEmpty {
+                if !network.isConnected {
+                    VStack(spacing: 12) {
                         Spacer()
-                        ProgressView().tint(ZTheme.accent)
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundColor(ZTheme.textTertiary)
+                        Text("No Internet Connection")
+                            .font(.system(size: 15))
+                            .foregroundColor(ZTheme.textSecondary)
                         Spacer()
-                    } else if results.isEmpty && !query.isEmpty {
-                        emptyState
-                    } else if results.isEmpty {
-                        browsePrompt
-                    } else {
-                        resultsGrid
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        searchBar
+                        genrePills
+                        Divider().background(ZTheme.border)
+
+                        if isLoading && results.isEmpty {
+                            Spacer(); ProgressView().tint(ZTheme.accent); Spacer()
+                        } else if results.isEmpty && !query.isEmpty {
+                            emptyState
+                        } else if results.isEmpty {
+                            browsePrompt
+                        } else {
+                            resultsGrid
+                        }
                     }
                 }
             }
@@ -82,10 +91,7 @@ struct SearchView: View {
             .padding(.vertical, 10)
             .background(ZTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(ZTheme.border, lineWidth: 1)
-            )
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(ZTheme.border, lineWidth: 1))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -120,17 +126,12 @@ struct SearchView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                     .onAppear {
-                        if index == results.count - 1 && !loadingMore && hasMore {
-                            loadMore()
-                        }
+                        if index == results.count - 1 && !loadingMore && hasMore { loadMore() }
                     }
                 }
             }
             .padding(16)
-
-            if loadingMore {
-                ProgressView().tint(ZTheme.accent).padding()
-            }
+            if loadingMore { ProgressView().tint(ZTheme.accent).padding() }
         }
     }
 
@@ -163,48 +164,28 @@ struct SearchView: View {
     func triggerSearch() {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         selectedGenre = nil
-        page = 1
-        hasMore = true
-        results = []
-        isLoading = true
+        page = 1; hasMore = true; results = []; isLoading = true
         Task {
             do {
                 let items = try await MangaService.shared.search(query: query, page: 1)
-                await MainActor.run {
-                    results = items
-                    isLoading = false
-                    hasMore = !items.isEmpty
-                }
-            } catch {
-                await MainActor.run { isLoading = false }
-            }
+                await MainActor.run { results = items; isLoading = false; hasMore = !items.isEmpty }
+            } catch { await MainActor.run { isLoading = false } }
         }
     }
 
     func triggerGenreSearch(_ genre: String) {
-        query = ""
-        page = 1
-        hasMore = true
-        results = []
-        isLoading = true
+        query = ""; selectedGenre = genre; page = 1; hasMore = true; results = []; isLoading = true
         let encoded = genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? genre
         Task {
             do {
                 let items = try await MangaService.shared.fetchByGenre(genre: encoded)
-                await MainActor.run {
-                    results = items.filter { !$0.coverURL.isEmpty && !$0.slug.contains("feed") }
-                    isLoading = false
-                    hasMore = !results.isEmpty
-                }
-            } catch {
-                await MainActor.run { isLoading = false }
-            }
+                await MainActor.run { results = items.filter { !$0.coverURL.isEmpty && !$0.slug.contains("feed") }; isLoading = false; hasMore = !results.isEmpty }
+            } catch { await MainActor.run { isLoading = false } }
         }
     }
 
     func loadMore() {
-        loadingMore = true
-        page += 1
+        loadingMore = true; page += 1
         Task {
             do {
                 let items: [Manga]
@@ -214,14 +195,8 @@ struct SearchView: View {
                 } else {
                     items = try await MangaService.shared.search(query: query, page: page)
                 }
-                await MainActor.run {
-                    results.append(contentsOf: items)
-                    loadingMore = false
-                    hasMore = !items.isEmpty
-                }
-            } catch {
-                await MainActor.run { loadingMore = false }
-            }
+                await MainActor.run { results.append(contentsOf: items); loadingMore = false; hasMore = !items.isEmpty }
+            } catch { await MainActor.run { loadingMore = false } }
         }
     }
 }
