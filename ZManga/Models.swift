@@ -1,3 +1,5 @@
+// Models.swift
+
 import Foundation
 import SwiftUI
 import WebKit
@@ -97,11 +99,17 @@ class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
     @Published var activeDownloads: [String: Double] = [:]
+    @Published var downloadQueue: [DownloadTask] = []
+    @Published var isProcessingQueue = false
     private let downloadsKey = "zmanga_downloads"
+    private let queueKey = "zmanga_download_queue"
 
-    init() { load() }
+    init() {
+        load()
+        loadQueue()
+    }
 
-    struct DownloadedChapter: Codable, Identifiable {
+    struct DownloadedChapter: Codable, Identifiable, Hashable {
         var id: String { "\(mangaSlug)_\(chapterSlug)" }
         let mangaSlug: String
         let chapterSlug: String
@@ -110,6 +118,24 @@ class DownloadManager: ObservableObject {
         let mangaCover: String
         let pages: [String]
         let downloadedAt: Date
+        
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(id)
+        }
+        
+        static func == (lhs: DownloadedChapter, rhs: DownloadedChapter) -> Bool {
+            lhs.id == rhs.id
+        }
+    }
+    
+    struct DownloadTask: Codable, Identifiable {
+        var id: String { "\(mangaSlug)_\(chapterSlug)" }
+        let mangaSlug: String
+        let chapterSlug: String
+        let chapterNumber: String
+        let mangaTitle: String
+        let mangaCover: String
+        let pages: [String]
     }
 
     var downloadedSize: Int64 {
@@ -128,6 +154,93 @@ class DownloadManager: ObservableObject {
 
     func progress(mangaSlug: String, chapterSlug: String) -> Double {
         activeDownloads["\(mangaSlug)_\(chapterSlug)"] ?? 0
+    }
+
+    @MainActor
+    func addToQueue(manga: Manga, chapter: Chapter, pages: [String]) {
+        let task = DownloadTask(
+            mangaSlug: manga.slug,
+            chapterSlug: chapter.slug,
+            chapterNumber: chapter.number,
+            mangaTitle: manga.title,
+            mangaCover: manga.coverURL,
+            pages: pages
+        )
+        downloadQueue.append(task)
+        saveQueue()
+        processQueue()
+    }
+    
+    @MainActor
+    func addMultipleToQueue(manga: Manga, chapters: [Chapter], pagesMap: [String: [String]]) {
+        for chapter in chapters {
+            if let pages = pagesMap[chapter.slug] {
+                let task = DownloadTask(
+                    mangaSlug: manga.slug,
+                    chapterSlug: chapter.slug,
+                    chapterNumber: chapter.number,
+                    mangaTitle: manga.title,
+                    mangaCover: manga.coverURL,
+                    pages: pages
+                )
+                downloadQueue.append(task)
+            }
+        }
+        saveQueue()
+        processQueue()
+    }
+    
+    @MainActor
+    private func processQueue() {
+        guard !isProcessingQueue, !downloadQueue.isEmpty else { return }
+        isProcessingQueue = true
+        
+        Task {
+            while !downloadQueue.isEmpty {
+                let task = downloadQueue.removeFirst()
+                saveQueue()
+                await downloadChapterFromTask(task)
+            }
+            isProcessingQueue = false
+        }
+    }
+    
+    @MainActor
+    private func downloadChapterFromTask(_ task: DownloadTask) async {
+        let key = "\(task.mangaSlug)_\(task.chapterSlug)"
+        guard !isDownloaded(mangaSlug: task.mangaSlug, chapterSlug: task.chapterSlug) else { return }
+        
+        activeDownloads[key] = 0.0
+        let dir = getChapterDir(mangaSlug: task.mangaSlug, chapterSlug: task.chapterSlug)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        
+        var localPaths: [String] = []
+        let session = URLSession.shared
+        for (idx, urlStr) in task.pages.enumerated() {
+            guard let url = URL(string: urlStr) else { continue }
+            do {
+                let (data, _) = try await session.data(from: url)
+                let filePath = dir.appendingPathComponent("\(idx).jpg")
+                try data.write(to: filePath)
+                localPaths.append(filePath.path)
+            } catch {
+                localPaths.append(urlStr)
+            }
+            activeDownloads[key] = Double(idx + 1) / Double(task.pages.count)
+        }
+        
+        let downloaded = DownloadedChapter(
+            mangaSlug: task.mangaSlug,
+            chapterSlug: task.chapterSlug,
+            chapterNumber: task.chapterNumber,
+            mangaTitle: task.mangaTitle,
+            mangaCover: task.mangaCover,
+            pages: localPaths,
+            downloadedAt: Date()
+        )
+        downloads[key] = downloaded
+        activeDownloads.removeValue(forKey: key)
+        save()
     }
 
     @MainActor
@@ -193,7 +306,9 @@ class DownloadManager: ObservableObject {
         let downloadsDir = base.appendingPathComponent("downloads")
         try? FileManager.default.removeItem(at: downloadsDir)
         downloads.removeAll()
+        downloadQueue.removeAll()
         save()
+        saveQueue()
     }
 
     func getPages(mangaSlug: String, chapterSlug: String) -> [String]? {
@@ -226,6 +341,23 @@ class DownloadManager: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: downloadsKey),
               let decoded = try? JSONDecoder().decode([String: DownloadedChapter].self, from: data) else { return }
         downloads = decoded
+    }
+    
+    private func saveQueue() {
+        if let data = try? JSONEncoder().encode(downloadQueue) {
+            UserDefaults.standard.set(data, forKey: queueKey)
+        }
+    }
+    
+    private func loadQueue() {
+        guard let data = UserDefaults.standard.data(forKey: queueKey),
+              let decoded = try? JSONDecoder().decode([DownloadTask].self, from: data) else { return }
+        downloadQueue = decoded
+        if !downloadQueue.isEmpty {
+            Task { @MainActor in
+                processQueue()
+            }
+        }
     }
 }
 
@@ -435,7 +567,6 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        // Referer ديناميكي يعتمد على host الفعلي للصورة
         let referer: String
         if let host = url.host {
             let components = host.components(separatedBy: ".")
