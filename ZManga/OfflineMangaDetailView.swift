@@ -44,7 +44,6 @@ struct OfflineMangaDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Hero section
                     HStack(alignment: .top, spacing: 16) {
                         CachedAsyncImage(url: URL(string: manga.highQualityCoverURL))
                             .frame(width: 110, height: 155)
@@ -75,7 +74,6 @@ struct OfflineMangaDetailView: View {
 
                     Divider().background(ZTheme.border).padding(.vertical, 20)
 
-                    // Chapters header
                     HStack {
                         Text("\(sortedChapters.count) CHAPTERS")
                             .font(.system(size: 11, weight: .semibold))
