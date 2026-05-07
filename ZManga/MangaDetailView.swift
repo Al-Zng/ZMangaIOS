@@ -5,6 +5,7 @@ struct MangaDetailView: View {
     let slug: String
     var preloadTitle: String = ""
     var preloadCover: String = ""
+    var downloadedOnly: Bool = false
 
     @State private var manga: Manga? = nil
     @State private var isLoading = true
@@ -15,11 +16,27 @@ struct MangaDetailView: View {
     @State private var multiSelectMode = false
     @State private var selectedChapters = Set<String>()
 
+    // جميع الفصول من المانجا
+    private var allChapters: [Chapter] {
+        manga?.chapters ?? []
+    }
+
+    // الفصول المحملة فقط (إذا كنا في وضع التحميلات)
+    private var downloadedChapterSlugs: Set<String> {
+        guard downloadedOnly else { return [] }
+        return Set(DownloadManager.shared.downloads.values
+            .filter { $0.mangaSlug == slug }
+            .map { $0.chapterSlug })
+    }
+
     var sortedChapters: [Chapter] {
-        guard let m = manga else { return [] }
+        let base = downloadedOnly
+            ? allChapters.filter { downloadedChapterSlugs.contains($0.slug) }
+            : allChapters
+
         return chapterSortAsc
-            ? m.chapters.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
-            : m.chapters.sorted { (Double($0.number) ?? 0) > (Double($1.number) ?? 0) }
+            ? base.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
+            : base.sorted { (Double($0.number) ?? 0) > (Double($1.number) ?? 0) }
     }
 
     var body: some View {
@@ -41,6 +58,12 @@ struct MangaDetailView: View {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 if let manga = manga {
                     Button {
+                        Task { await loadDetail() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(ZTheme.textSecondary)
+                    }
+                    Button {
                         if store.isInLibrary(manga) {
                             store.removeFromLibrary(manga)
                         } else {
@@ -50,38 +73,40 @@ struct MangaDetailView: View {
                         Image(systemName: store.isInLibrary(manga) ? "heart.fill" : "heart")
                             .foregroundColor(store.isInLibrary(manga) ? ZTheme.accent : ZTheme.textSecondary)
                     }
-                    Menu {
-                        Button {
-                            if store.isWantToRead(manga) {
-                                store.removeWantToRead(manga)
-                            } else {
-                                store.addWantToRead(manga)
+                    if !downloadedOnly {
+                        Menu {
+                            Button {
+                                if store.isWantToRead(manga) {
+                                    store.removeWantToRead(manga)
+                                } else {
+                                    store.addWantToRead(manga)
+                                }
+                            } label: {
+                                Label(store.isWantToRead(manga) ? "Remove from Want to Read" : "Add to Want to Read",
+                                      systemImage: store.isWantToRead(manga) ? "bookmark.fill" : "bookmark")
+                            }
+                            Button {
+                                if store.isCompleted(manga) {
+                                    store.removeCompleted(manga)
+                                } else {
+                                    store.addCompleted(manga)
+                                }
+                            } label: {
+                                Label(store.isCompleted(manga) ? "Mark as Uncompleted" : "Mark as Completed",
+                                      systemImage: store.isCompleted(manga) ? "checkmark.circle.fill" : "checkmark.circle")
+                            }
+                            Divider()
+                            Button {
+                                multiSelectMode.toggle()
+                                if !multiSelectMode { selectedChapters.removeAll() }
+                            } label: {
+                                Label(multiSelectMode ? "Cancel Selection" : "Select Chapters to Download",
+                                      systemImage: multiSelectMode ? "xmark.circle" : "checkmark.rectangle")
                             }
                         } label: {
-                            Label(store.isWantToRead(manga) ? "Remove from Want to Read" : "Add to Want to Read",
-                                  systemImage: store.isWantToRead(manga) ? "bookmark.fill" : "bookmark")
+                            Image(systemName: "ellipsis.circle")
+                                .foregroundColor(ZTheme.textSecondary)
                         }
-                        Button {
-                            if store.isCompleted(manga) {
-                                store.removeCompleted(manga)
-                            } else {
-                                store.addCompleted(manga)
-                            }
-                        } label: {
-                            Label(store.isCompleted(manga) ? "Mark as Uncompleted" : "Mark as Completed",
-                                  systemImage: store.isCompleted(manga) ? "checkmark.circle.fill" : "checkmark.circle")
-                        }
-                        Divider()
-                        Button {
-                            multiSelectMode.toggle()
-                            if !multiSelectMode { selectedChapters.removeAll() }
-                        } label: {
-                            Label(multiSelectMode ? "Cancel Selection" : "Select Chapters to Download",
-                                  systemImage: multiSelectMode ? "xmark.circle" : "checkmark.rectangle")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .foregroundColor(ZTheme.textSecondary)
                     }
                 }
             }
@@ -92,7 +117,8 @@ struct MangaDetailView: View {
                 let localPages = DownloadManager.shared.isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug)
                     ? DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: chapter.slug)
                     : nil
-                ReaderView(manga: manga, chapter: chapter, allChapters: sortedChapters,
+                let chaptersForReader = downloadedOnly ? sortedChapters : allChapters
+                ReaderView(manga: manga, chapter: chapter, allChapters: chaptersForReader,
                            initialPage: progress?.pageIndex ?? 0, preloadedPages: localPages)
                     .environmentObject(store)
             } else {
@@ -166,7 +192,7 @@ struct MangaDetailView: View {
                     Divider().background(ZTheme.border).padding(.vertical, 16)
                 }
 
-                if multiSelectMode {
+                if multiSelectMode && !downloadedOnly {
                     HStack {
                         Button("Download (\(selectedChapters.count))") {
                             Task { await downloadSelectedChapters(manga) }
@@ -181,7 +207,7 @@ struct MangaDetailView: View {
                     .padding(.bottom, 12)
                 }
 
-                chaptersHeader(count: manga.chapters.count)
+                chaptersHeader(count: sortedChapters.count)
 
                 LazyVStack(spacing: 0) {
                     ForEach(sortedChapters) { chapter in
@@ -201,7 +227,7 @@ struct MangaDetailView: View {
                                         selectedChapters.insert(chapter.slug)
                                     }
                                 } else {
-                                    guard !manga.chapters.isEmpty else {
+                                    guard !sortedChapters.isEmpty else {
                                         showChapterError = true
                                         return
                                     }
@@ -288,14 +314,14 @@ struct MangaDetailView: View {
                     }
                 }
 
-                if let firstChapter = manga.chapters.min(by: { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }) {
+                if let firstChapter = sortedChapters.first {
                     Button {
-                        guard !manga.chapters.isEmpty else {
+                        guard !sortedChapters.isEmpty else {
                             showChapterError = true
                             return
                         }
                         if let progress = store.history.first(where: { $0.mangaSlug == manga.slug }),
-                           let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) {
+                           let historyChapter = sortedChapters.first(where: { $0.slug == progress.chapterSlug }) {
                             selectedChapter = historyChapter
                         } else {
                             selectedChapter = firstChapter
@@ -398,10 +424,10 @@ struct MangaDetailView: View {
     }
 
     private func downloadSelectedChapters(_ manga: Manga) async {
-        for slug in selectedChapters {
-            if let chapter = manga.chapters.first(where: { $0.slug == slug }) {
-                await DownloadManager.shared.downloadChapter(manga: manga, chapter: chapter)
-            }
+        let chaptersToDownload = sortedChapters.filter { selectedChapters.contains($0.slug) }
+        let orderedChapters = chaptersToDownload.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
+        for chapter in orderedChapters {
+            await DownloadManager.shared.downloadChapter(manga: manga, chapter: chapter)
         }
         selectedChapters.removeAll()
     }
