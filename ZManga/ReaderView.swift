@@ -4,6 +4,10 @@ struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) var dismiss
 
+    // إعدادات المستخدم من SettingsView
+    @AppStorage("tapToScrollEnabled") var tapToScrollEnabled = true
+    @AppStorage("zoomEnabled") var zoomEnabled = true
+
     let manga: Manga
     let chapter: Chapter
     let allChapters: [Chapter]
@@ -24,6 +28,9 @@ struct ReaderView: View {
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
     @State private var visiblePage = 0
+
+    // Tap to scroll
+    @State private var lastTapTime: Date = .distantPast
 
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0, preloadedPages: [String]? = nil) {
         self.manga = manga
@@ -55,27 +62,61 @@ struct ReaderView: View {
                 readerContent
             }
 
-            // زر الإغلاق
-            VStack {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(width: 34, height: 34)
-                            .background(.black.opacity(0.7))
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.5), radius: 4)
+            // زر الإغلاق (كبير وأعلى) - يختفي مع UI
+            if showUI {
+                VStack {
+                    HStack {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(width: 40, height: 40)
+                                .background(.black.opacity(0.7))
+                                .clipShape(Circle())
+                                .shadow(color: .black.opacity(0.5), radius: 4)
+                        }
+                        Spacer()
                     }
+                    .padding(.top, 60)
+                    .padding(.leading, 20)
                     Spacer()
                 }
-                .padding(.top, 56)
-                .padding(.leading, 16)
-                Spacer()
+                .transition(.opacity)
             }
 
-            if showUI && !allPages.isEmpty { topBar }
-            VStack { Spacer(); bottomBar }
+            // شريط التقدم (رقم الصفحة) - دائمًا مع UI، غير اختياري
+            if showUI && !allPages.isEmpty {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("\(currentPage + 1) / \(allPages.count)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.85))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.black.opacity(0.7))
+                            .clipShape(Capsule())
+                            .shadow(color: .black.opacity(0.5), radius: 4)
+                        Spacer()
+                    }
+                    .padding(.bottom, 12)
+                }
+                .transition(.opacity)
+            }
+
+            // الشريط العلوي (اسم المانجا والفصل) - يختفي مع UI
+            if showUI && !allPages.isEmpty {
+                topBar
+            }
+
+            // الشريط السفلي (شريط التقدم النسبي) - يختفي مع UI
+            if showUI && !allPages.isEmpty {
+                VStack {
+                    Spacer()
+                    bottomBar
+                }
+            }
         }
         .ignoresSafeArea(edges: .bottom)
         .statusBarHidden(!showUI)
@@ -117,7 +158,7 @@ struct ReaderView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Reader Content
+    // MARK: - Reader Content (Tap to Scroll و Zoom حسب الإعدادات)
     var readerContent: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
@@ -127,7 +168,7 @@ struct ReaderView: View {
                             ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
                                 .id("sep_\(idx)")
                         }
-                        MangaPageImage(url: page.url)
+                        MangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
                             .id(idx)
                             .background(GeometryReader { geo in
                                 Color.clear.preference(
@@ -159,8 +200,23 @@ struct ReaderView: View {
             }
             .onAppear { proxy.scrollTo(initialPage, anchor: .top) }
             .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
-                if showUI { resetUITimer() }
+                // لا تعمل إلا إذا كانت مفعّلة من الإعدادات
+                guard tapToScrollEnabled else { return }
+                let now = Date()
+                if now.timeIntervalSince(lastTapTime) < 0.3 {
+                    // ضغطة مزدوجة: إظهار/إخفاء UI
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showUI.toggle()
+                    }
+                    if showUI { resetUITimer() }
+                } else {
+                    // ضغطة واحدة: النزول عدة صفحات
+                    let target = min(currentPage + 5, max(0, allPages.count - 1))
+                    withAnimation {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
+                }
+                lastTapTime = now
             }
         }
     }
@@ -178,15 +234,6 @@ struct ReaderView: View {
                     .foregroundColor(.white.opacity(0.55))
             }
             Spacer()
-            if !allPages.isEmpty {
-                Text("\(currentPage + 1) / \(allPages.count)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.75))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(.black.opacity(0.55))
-                    .clipShape(Capsule())
-            }
         }
         .padding(.horizontal, 60)
         .padding(.top, 56)
@@ -195,22 +242,18 @@ struct ReaderView: View {
         .transition(.opacity)
     }
 
-    // MARK: - Bottom Bar
+    // MARK: - Bottom Bar (شريط التقدم الأفقي)
     var bottomBar: some View {
-        Group {
-            if !allPages.isEmpty {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Rectangle().fill(Color.white.opacity(0.08))
-                        Rectangle()
-                            .fill(ZTheme.accent)
-                            .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
-                            .animation(.easeOut(duration: 0.15), value: currentPage)
-                    }
-                }
-                .frame(height: 2)
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.white.opacity(0.08))
+                Rectangle()
+                    .fill(ZTheme.accent)
+                    .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
+                    .animation(.easeOut(duration: 0.15), value: currentPage)
             }
         }
+        .frame(height: 2)
     }
 
     // MARK: - Empty / Error
@@ -237,7 +280,7 @@ struct ReaderView: View {
         }
     }
 
-    // MARK: - تحميل الفصل
+    // MARK: - تحميل الفصل (مع دعم الصور المحلية)
     func loadInitialChapter() async {
         isLoading = true
         errorMessage = nil
@@ -348,10 +391,13 @@ struct ScrollOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-// MARK: - MangaPageImage (تدعم الصور المحلية)
+// MARK: - MangaPageImage (دعم الصور المحلية + زوم اختياري)
 struct MangaPageImage: View {
     let url: String
+    var zoomEnabled: Bool = true
     @State private var localImage: UIImage?
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
 
     var body: some View {
         Group {
@@ -359,17 +405,32 @@ struct MangaPageImage: View {
                 Image(uiImage: img)
                     .resizable()
                     .scaledToFit()
+                    .scaleEffect(scale)
+                    .gesture(zoomEnabled ? MagnificationGesture()
+                        .onChanged { value in scale = lastScale * value }
+                        .onEnded { _ in
+                            withAnimation { scale = min(max(scale, 1.0), 3.0) }
+                            lastScale = scale
+                        }
+                    : nil)
                     .frame(maxWidth: .infinity)
             } else {
                 CachedAsyncImage(url: URL(string: url))
                     .scaledToFit()
+                    .scaleEffect(scale)
+                    .gesture(zoomEnabled ? MagnificationGesture()
+                        .onChanged { value in scale = lastScale * value }
+                        .onEnded { _ in
+                            withAnimation { scale = min(max(scale, 1.0), 3.0) }
+                            lastScale = scale
+                        }
+                    : nil)
                     .frame(maxWidth: .infinity)
             }
         }
         .background(Color.black)
         .onAppear {
             if !url.hasPrefix("http") {
-                // مسار ملف محلي
                 localImage = UIImage(contentsOfFile: url)
             }
         }
