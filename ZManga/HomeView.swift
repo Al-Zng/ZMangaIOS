@@ -292,7 +292,7 @@ struct PopularCard: View {
     }
 }
 
-// MARK: - Latest Update Row
+// MARK: - Latest Update Row (مُعدّلة لعرض آخر فصل بدلاً من التقييم)
 struct LatestUpdateRow: View {
     let manga: Manga
     var body: some View {
@@ -306,6 +306,7 @@ struct LatestUpdateRow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(ZTheme.textPrimary)
                     .lineLimit(2)
+                // عرض آخر فصل نزل
                 if let chapter = manga.latestChapterNumber {
                     Text("Chapter \(chapter)")
                         .font(.system(size: 12))
