@@ -1,3 +1,5 @@
+// DownloadsView.swift
+
 import SwiftUI
 
 // MARK: - كائن مساعد للتنقل (يدعم Identifiable)
@@ -11,25 +13,20 @@ struct DownloadedChapterSelection: Identifiable {
 struct DownloadsView: View {
     @EnvironmentObject var store: AppStore
     @StateObject private var dm = DownloadManager.shared
-    @State private var selectedItem: DownloadedChapterSelection? = nil
+
+    var groupedMangas: [(slug: String, title: String, cover: String, chapters: [DownloadManager.DownloadedChapter])] {
+        let dict = Dictionary(grouping: dm.downloads.values, by: { $0.mangaSlug })
+        return dict.map { key, value in
+            (slug: key, title: value.first?.mangaTitle ?? "", cover: value.first?.mangaCover ?? "", chapters: value)
+        }
+    }
 
     var body: some View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
 
-                if !NetworkMonitor.shared.isConnected {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        Image(systemName: "wifi.slash")
-                            .font(.system(size: 48, weight: .ultraLight))
-                            .foregroundColor(ZTheme.textTertiary)
-                        Text("No Internet Connection")
-                            .font(.system(size: 15))
-                            .foregroundColor(ZTheme.textSecondary)
-                        Spacer()
-                    }
-                } else if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
+                if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 48, weight: .ultraLight))
@@ -50,16 +47,20 @@ struct DownloadsView: View {
                                 }
                             }
                         }
-                        Section("Completed") {
-                            ForEach(Array(dm.downloads.values)) { chapter in
-                                DownloadCompleteRow(chapter: chapter) {
-                                    openDownloadedChapter(chapter)
+                        if !groupedMangas.isEmpty {
+                            Section("Completed") {
+                                ForEach(groupedMangas, id: \.slug) { item in
+                                    NavigationLink(destination: OfflineMangaDetailView(slug: item.slug, preloadTitle: item.title, preloadCover: item.cover)) {
+                                        MangaDownloadCard(title: item.title, cover: item.cover, chapterCount: item.chapters.count)
+                                    }
                                 }
-                            }
-                            .onDelete { indexSet in
-                                for idx in indexSet {
-                                    let ch = Array(dm.downloads.values)[idx]
-                                    dm.deleteChapter(mangaSlug: ch.mangaSlug, chapterSlug: ch.chapterSlug)
+                                .onDelete { indexSet in
+                                    for idx in indexSet {
+                                        let slug = groupedMangas[idx].slug
+                                        for chapter in dm.downloads.values where chapter.mangaSlug == slug {
+                                            dm.deleteChapter(mangaSlug: chapter.mangaSlug, chapterSlug: chapter.chapterSlug)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -79,20 +80,38 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
-            .fullScreenCover(item: $selectedItem) { item in
-                ReaderView(manga: item.manga, chapter: item.chapter,
-                           allChapters: [item.chapter],
-                           initialPage: 0, preloadedPages: item.pages)
-                    .environmentObject(store)
-            }
         }
     }
+}
 
-    private func openDownloadedChapter(_ chapter: DownloadManager.DownloadedChapter) {
-        guard let pages = dm.getPages(mangaSlug: chapter.mangaSlug, chapterSlug: chapter.chapterSlug) else { return }
-        let manga = Manga(slug: chapter.mangaSlug, title: chapter.mangaTitle, coverURL: chapter.mangaCover)
-        let chap = Chapter(slug: chapter.chapterSlug, number: chapter.chapterNumber, pages: pages)
-        selectedItem = DownloadedChapterSelection(manga: manga, chapter: chap, pages: pages)
+struct MangaDownloadCard: View {
+    let title: String
+    let cover: String
+    let chapterCount: Int
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if !cover.isEmpty {
+                CachedAsyncImage(url: URL(string: cover))
+                    .frame(width: 50, height: 70)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(ZTheme.textPrimary)
+                    .lineLimit(2)
+                Text("\(chapterCount) chapter\(chapterCount > 1 ? "s" : "") downloaded")
+                    .font(.system(size: 12))
+                    .foregroundColor(ZTheme.textSecondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundColor(ZTheme.textTertiary)
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -139,41 +158,5 @@ struct DownloadingRow: View {
             }
         }
         .padding(.vertical, 4)
-    }
-}
-
-struct DownloadCompleteRow: View {
-    let chapter: DownloadManager.DownloadedChapter
-    var action: (() -> Void)? = nil
-
-    var body: some View {
-        Button {
-            action?()
-        } label: {
-            HStack(spacing: 12) {
-                if !chapter.mangaCover.isEmpty {
-                    CachedAsyncImage(url: URL(string: chapter.mangaCover))
-                        .frame(width: 50, height: 70)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                } else {
-                    RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(chapter.mangaTitle)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(ZTheme.textPrimary)
-                        .lineLimit(1)
-                    Text("Chapter \(chapter.chapterNumber)")
-                        .font(.system(size: 12))
-                        .foregroundColor(ZTheme.textSecondary)
-                    Text("Downloaded \(chapter.downloadedAt.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.system(size: 11))
-                        .foregroundColor(ZTheme.textTertiary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .foregroundColor(ZTheme.textTertiary)
-            }
-        }
     }
 }
