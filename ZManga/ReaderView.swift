@@ -142,7 +142,7 @@ struct ReaderView: View {
                                 ChapterSeparator(number: allChapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
                                     .id("sep_\(idx)")
                             }
-                            OptimizedMangaPageImage(url: page.url, zoomEnabled: zoomEnabled && !tapToScrollEnabled)
+                            OptimizedMangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
                                 .id(idx)
                                 .background(GeometryReader { geo in
                                     Color.clear.preference(
@@ -167,6 +167,7 @@ struct ReaderView: View {
                     scrollProxy = proxy
                     proxy.scrollTo(initialPage, anchor: .top)
                 }
+                .gesture(doubleTapGesture)
                 .onTapGesture { handleTap() }
             } else {
                 // Standard ScrollView
@@ -177,7 +178,7 @@ struct ReaderView: View {
                                 ChapterSeparator(number: allChapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
                                     .id("sep_\(idx)")
                             }
-                            MangaPageImage(url: page.url, zoomEnabled: zoomEnabled && !tapToScrollEnabled)
+                            MangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
                                 .id(idx)
                                 .background(GeometryReader { geo in
                                     Color.clear.preference(
@@ -202,6 +203,7 @@ struct ReaderView: View {
                     scrollProxy = proxy
                     proxy.scrollTo(initialPage, anchor: .top)
                 }
+                .gesture(doubleTapGesture)
                 .onTapGesture { handleTap() }
             }
         }
@@ -210,7 +212,6 @@ struct ReaderView: View {
     // MARK: - Tap Handling
     private func handleTap() {
         if tapToScrollEnabled {
-            // Single tap scrolls down slightly
             withAnimation {
                 scrollProxy?.scrollTo(currentPage + 1, anchor: .top)
             }
@@ -218,6 +219,15 @@ struct ReaderView: View {
             withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
             if showUI { resetUITimer() }
         }
+    }
+
+    // إيماءة الضغط المزدوج – تعمل دائمًا لإظهار/إخفاء UI
+    private var doubleTapGesture: some Gesture {
+        TapGesture(count: 2)
+            .onEnded {
+                withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
+                if showUI { resetUITimer() }
+            }
     }
 
     private func handlePageOffsetChange(_ offsets: [Int: CGFloat]) {
