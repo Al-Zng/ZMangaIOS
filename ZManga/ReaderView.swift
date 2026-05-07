@@ -265,12 +265,12 @@ struct ReaderView: View {
 
         totalPages = pagesToLoad.count
         // محاكاة تحميل الصفحات (اختياري لكن لإظهار شريط التقدم)
-        for i in 0..<pagesToLoad.count {
+        for i in 0..<min(pagesToLoad.count, 3) {
             await MainActor.run {
                 loadedPagesCount = i + 1
                 loadingProgress = Double(loadedPagesCount) / Double(totalPages)
             }
-            try? await Task.sleep(nanoseconds: 10_000_000) // 0.01s لكل صفحة لتحسين المظهر
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
 
         await MainActor.run {
@@ -348,13 +348,31 @@ struct ScrollOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+// MARK: - MangaPageImage (تدعم الصور المحلية)
 struct MangaPageImage: View {
     let url: String
+    @State private var localImage: UIImage?
+
     var body: some View {
-        CachedAsyncImage(url: URL(string: url))
-            .scaledToFit()
-            .frame(maxWidth: .infinity)
-            .background(Color.black)
+        Group {
+            if let img = localImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+            } else {
+                CachedAsyncImage(url: URL(string: url))
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Color.black)
+        .onAppear {
+            if !url.hasPrefix("http") {
+                // مسار ملف محلي
+                localImage = UIImage(contentsOfFile: url)
+            }
+        }
     }
 }
 
