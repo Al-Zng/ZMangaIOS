@@ -1,5 +1,3 @@
-// HomeView.swift
-
 import SwiftUI
 
 struct HomeView: View {
@@ -294,7 +292,7 @@ struct PopularCard: View {
     }
 }
 
-// MARK: - Latest Update Row (shows latest chapter number instead of rating)
+// MARK: - Latest Update Row
 struct LatestUpdateRow: View {
     let manga: Manga
     var body: some View {
@@ -312,6 +310,11 @@ struct LatestUpdateRow: View {
                     Text("Chapter \(chapter)")
                         .font(.system(size: 12))
                         .foregroundColor(ZTheme.accent)
+                }
+                if let time = manga.lastUpdated {
+                    Text(time)
+                        .font(.system(size: 11))
+                        .foregroundColor(ZTheme.textTertiary)
                 }
             }
             Spacer()
