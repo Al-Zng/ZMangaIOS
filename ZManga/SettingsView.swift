@@ -1,8 +1,16 @@
+// SettingsView.swift
+
 import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("autoLoadNextChapter") var autoLoadNextChapter = true
+    @AppStorage("tapToScrollEnabled") var tapToScrollEnabled = false
+    @AppStorage("zoomEnabled") var zoomEnabled = false
+    @AppStorage("optimizationEnabled") var optimizationEnabled = false
+    @AppStorage("preloadNextChapter") var preloadNextChapter = false
+    @AppStorage("keepScreenOn") var keepScreenOn = false
+    @AppStorage("reduceMotion") var reduceMotion = false
 
     var body: some View {
         NavigationView {
@@ -11,6 +19,24 @@ struct SettingsView: View {
                 List {
                     Section("Reading") {
                         Toggle("Auto-load next chapter", isOn: $autoLoadNextChapter)
+                            .tint(ZTheme.accent)
+                        Toggle("Preload Next Chapter", isOn: $preloadNextChapter)
+                            .tint(ZTheme.accent)
+                        Toggle("Keep Screen On While Reading", isOn: $keepScreenOn)
+                            .tint(ZTheme.accent)
+                    }
+                    
+                    Section("Reader Controls") {
+                        Toggle("Tap to Scroll", isOn: $tapToScrollEnabled)
+                            .tint(ZTheme.accent)
+                        Toggle("Zoom (Pinch to Zoom)", isOn: $zoomEnabled)
+                            .tint(ZTheme.accent)
+                    }
+                    
+                    Section("Performance & UX") {
+                        Toggle("Optimization (Metal Rendering)", isOn: $optimizationEnabled)
+                            .tint(ZTheme.accent)
+                        Toggle("Reduce Motion", isOn: $reduceMotion)
                             .tint(ZTheme.accent)
                     }
 
