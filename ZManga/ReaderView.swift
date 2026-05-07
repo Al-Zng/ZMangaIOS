@@ -25,13 +25,13 @@ struct ReaderView: View {
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
     @State private var visiblePage = 0
 
-    // إعدادات المستخدم
+    // إعدادات المستخدم من AppStorage
     @AppStorage("tapToScroll") var tapToScroll = true
     @AppStorage("doubleTapUIToggle") var doubleTapUIToggle = true
     @AppStorage("enablePinchZoom") var enablePinchZoom = true
     @AppStorage("autoLoadNextChapter") var autoLoadNextChapter = true
 
-    // التعامل مع النقر المزدوج
+    // مساعدات للنقر المزدوج
     @State private var lastTapTime: Date?
 
     init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0, preloadedPages: [String]? = nil) {
@@ -64,7 +64,7 @@ struct ReaderView: View {
                 readerContent
             }
 
-            // زر الإغلاق (أكبر، أعلى، ويختفي مع UI)
+            // زر الإغلاق (أكبر، أعلى، يختفي مع UI)
             if showUI {
                 VStack {
                     HStack {
@@ -349,6 +349,7 @@ struct ReaderView: View {
         }
 
         totalPages = pagesToLoad.count
+        // محاكاة تحميل الصفحات (اختياري لكن لإظهار شريط التقدم)
         for i in 0..<min(pagesToLoad.count, 3) {
             await MainActor.run {
                 loadedPagesCount = i + 1
@@ -433,7 +434,7 @@ struct ScrollOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-// MARK: - MangaPageImage (مع تكبير/تصغير)
+// MARK: - MangaPageImage (مع تكبير/تصغير ودعم الصور المحلية)
 struct MangaPageImage: View {
     let url: String
     var enableZoom: Bool = true
