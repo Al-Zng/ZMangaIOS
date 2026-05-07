@@ -1,3 +1,4 @@
+// ContentView.swift
 import SwiftUI
 
 struct ContentView: View {
@@ -38,23 +39,6 @@ struct ContentView: View {
                     .tag(4)
             }
             .accentColor(ZTheme.accent)
-
-            if !network.isConnected {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Image(systemName: "wifi.slash")
-                        Text("No Internet Connection")
-                            .font(.system(size: 13, weight: .medium))
-                        Spacer()
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.9))
-                    .foregroundColor(.white)
-                }
-                .transition(.move(edge: .bottom))
-                .animation(.default, value: network.isConnected)
-            }
         }
         .onAppear {
             AppStore.currentStore = store
