@@ -22,6 +22,8 @@
     AA000033 /* DownloadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000032; };
     AA000035 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000034; };
     AA000037 /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000036; };
+    AA000039 /* OfflineMangaDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000038; };
+    AA000041 /* ZoomableImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000040; };
 
     /* ---------- File References ---------- */
     AA000004 /* ZMangaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZMangaApp.swift; path = ZManga/ZMangaApp.swift; sourceTree = "<group>"; };
@@ -41,6 +43,8 @@
     AA000032 /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DownloadsView.swift; path = ZManga/DownloadsView.swift; sourceTree = "<group>"; };
     AA000034 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkMonitor.swift; path = ZManga/NetworkMonitor.swift; sourceTree = "<group>"; };
     AA000036 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Logger.swift; path = ZManga/Logger.swift; sourceTree = "<group>"; };
+    AA000038 /* OfflineMangaDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OfflineMangaDetailView.swift; path = ZManga/OfflineMangaDetailView.swift; sourceTree = "<group>"; };
+    AA000040 /* ZoomableImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ZoomableImageView.swift; path = ZManga/ZoomableImageView.swift; sourceTree = "<group>"; };
 
     /* ---------- Build Phases ---------- */
     AA000007 /* Sources */ = {
@@ -62,6 +66,8 @@
         AA000033,
         AA000035,
         AA000037,
+        AA000039,
+        AA000041,
       );
       runOnlyForDeploymentPostprocessing = 0;
     };
@@ -99,6 +105,8 @@
         AA000032, /* DownloadsView.swift */
         AA000034, /* NetworkMonitor.swift */
         AA000036, /* Logger.swift */
+        AA000038, /* OfflineMangaDetailView.swift */
+        AA000040, /* ZoomableImageView.swift */
         AA000006, /* Info.plist */
         AA00000E, /* Products */
       );
