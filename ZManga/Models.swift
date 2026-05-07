@@ -1,3 +1,5 @@
+// Models.swift
+
 import Foundation
 import SwiftUI
 import WebKit
@@ -92,12 +94,15 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager (مع غلاف وحجم)
+// MARK: - Download Manager (with sequential queue)
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
     @Published var activeDownloads: [String: Double] = [:]
     private let downloadsKey = "zmanga_downloads"
+
+    private var downloadQueue: [(Manga, Chapter, [String]?)] = []
+    private var processTask: Task<Void, Never>?
 
     init() { load() }
 
@@ -136,48 +141,65 @@ class DownloadManager: ObservableObject {
         guard !isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
               !isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) else { return }
 
-        activeDownloads[key] = 0.0
-        let dir = getChapterDir(mangaSlug: manga.slug, chapterSlug: chapter.slug)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        downloadQueue.append((manga, chapter, pages))
+        if processTask == nil {
+            processTask = Task { await processDownloads() }
+        }
+    }
 
-        let urls: [String]
-        if let pages = pages {
-            urls = pages
-        } else {
-            guard let fetched = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else {
+    private func processDownloads() async {
+        while !downloadQueue.isEmpty {
+            let (manga, chapter, pages) = downloadQueue.removeFirst()
+            let key = "\(manga.slug)_\(chapter.slug)"
+            guard !isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
+                  !isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) else { continue }
+
+            await MainActor.run { activeDownloads[key] = 0.0 }
+            let dir = getChapterDir(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+            let urls: [String]
+            if let pages = pages {
+                urls = pages
+            } else {
+                guard let fetched = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else {
+                    await MainActor.run { activeDownloads.removeValue(forKey: key) }
+                    continue
+                }
+                urls = fetched
+            }
+
+            var localPaths: [String] = []
+            let session = URLSession.shared
+            for (idx, urlStr) in urls.enumerated() {
+                guard let url = URL(string: urlStr) else { continue }
+                do {
+                    let (data, _) = try await session.data(from: url)
+                    let filePath = dir.appendingPathComponent("\(idx).jpg")
+                    try data.write(to: filePath)
+                    localPaths.append(filePath.path)
+                } catch {
+                    localPaths.append(urlStr)
+                }
+                await MainActor.run { activeDownloads[key] = Double(idx + 1) / Double(urls.count) }
+            }
+
+            let downloaded = DownloadedChapter(
+                mangaSlug: manga.slug,
+                chapterSlug: chapter.slug,
+                chapterNumber: chapter.number,
+                mangaTitle: manga.title,
+                mangaCover: manga.coverURL,
+                pages: localPaths,
+                downloadedAt: Date()
+            )
+            await MainActor.run {
+                downloads[key] = downloaded
                 activeDownloads.removeValue(forKey: key)
-                return
+                save()
             }
-            urls = fetched
         }
-
-        var localPaths: [String] = []
-        let session = URLSession.shared
-        for (idx, urlStr) in urls.enumerated() {
-            guard let url = URL(string: urlStr) else { continue }
-            do {
-                let (data, _) = try await session.data(from: url)
-                let filePath = dir.appendingPathComponent("\(idx).jpg")
-                try data.write(to: filePath)
-                localPaths.append(filePath.path)
-            } catch {
-                localPaths.append(urlStr)
-            }
-            activeDownloads[key] = Double(idx + 1) / Double(urls.count)
-        }
-
-        let downloaded = DownloadedChapter(
-            mangaSlug: manga.slug,
-            chapterSlug: chapter.slug,
-            chapterNumber: chapter.number,
-            mangaTitle: manga.title,
-            mangaCover: manga.coverURL,
-            pages: localPaths,
-            downloadedAt: Date()
-        )
-        downloads[key] = downloaded
-        activeDownloads.removeValue(forKey: key)
-        save()
+        processTask = nil
     }
 
     func deleteChapter(mangaSlug: String, chapterSlug: String) {
@@ -435,7 +457,6 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
-        // Referer ديناميكي يعتمد على host الفعلي للصورة
         let referer: String
         if let host = url.host {
             let components = host.components(separatedBy: ".")
@@ -475,5 +496,74 @@ struct CachedAsyncImage: View {
             }
         }
         await MainActor.run { loadFailed = true; isLoading = false }
+    }
+
+    // Static method to fetch image for external use (e.g., ZoomableImageView)
+    static func fetchImage(for url: URL) async throws -> UIImage {
+        let urlStr = url.absoluteString.lowercased()
+        if urlStr.contains("lekmanga.png") || urlStr.contains("-512.png") || urlStr.contains("/favicon") {
+            throw NSError(domain: "ImageLoad", code: -1, userInfo: nil)
+        }
+
+        let config = URLSessionConfiguration.default
+        config.urlCache = cache
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        config.timeoutIntervalForRequest = 20
+        config.httpShouldSetCookies = true
+        config.httpCookieAcceptPolicy = .always
+        let session = URLSession(configuration: config)
+
+        let wkCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                continuation.resume(returning: cookies)
+            }
+        }
+        for cookie in wkCookies {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+
+        let allCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        let wkFiltered = wkCookies.filter { wk in !allCookies.contains(where: { $0.name == wk.name }) }
+        let cookieHeader = (allCookies + wkFiltered)
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
+
+        let referer: String
+        if let host = url.host {
+            let components = host.components(separatedBy: ".")
+            if components.count >= 2 {
+                let mainDomain = components.suffix(2).joined(separator: ".")
+                referer = "https://\(mainDomain)/"
+            } else {
+                referer = "https://\(host)/"
+            }
+        } else {
+            referer = "https://lekmanga.site/"
+        }
+
+        for _ in 0..<3 {
+            var request = URLRequest(url: url)
+            request.setValue(referer, forHTTPHeaderField: "Referer")
+            request.setValue("https://lekmanga.site", forHTTPHeaderField: "Origin")
+            request.setValue(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                forHTTPHeaderField: "User-Agent"
+            )
+            if !cookieHeader.isEmpty {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let httpResp = response as? HTTPURLResponse,
+                   httpResp.statusCode == 200,
+                   let img = UIImage(data: data),
+                   img.size.width > 0 {
+                    return img
+                }
+            } catch {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+        throw NSError(domain: "ImageLoad", code: -1, userInfo: nil)
     }
 }
