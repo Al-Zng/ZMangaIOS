@@ -5,7 +5,6 @@ struct MangaDetailView: View {
     let slug: String
     var preloadTitle: String = ""
     var preloadCover: String = ""
-    var showOnlyDownloaded: Bool = false
 
     @State private var manga: Manga? = nil
     @State private var isLoading = true
@@ -18,12 +17,9 @@ struct MangaDetailView: View {
 
     var sortedChapters: [Chapter] {
         guard let m = manga else { return [] }
-        let chaps = showOnlyDownloaded
-            ? m.chapters.filter { DownloadManager.shared.isDownloaded(mangaSlug: m.slug, chapterSlug: $0.slug) }
-            : m.chapters
         return chapterSortAsc
-            ? chaps.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
-            : chaps.sorted { (Double($0.number) ?? 0) > (Double($1.number) ?? 0) }
+            ? m.chapters.sorted { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }
+            : m.chapters.sorted { (Double($0.number) ?? 0) > (Double($1.number) ?? 0) }
     }
 
     var body: some View {
@@ -43,7 +39,7 @@ struct MangaDetailView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if let manga = manga, !showOnlyDownloaded {
+                if let manga = manga {
                     Button {
                         if store.isInLibrary(manga) {
                             store.removeFromLibrary(manga)
@@ -185,7 +181,7 @@ struct MangaDetailView: View {
                     .padding(.bottom, 12)
                 }
 
-                chaptersHeader(count: sortedChapters.count)
+                chaptersHeader(count: manga.chapters.count)
 
                 LazyVStack(spacing: 0) {
                     ForEach(sortedChapters) { chapter in
@@ -205,7 +201,7 @@ struct MangaDetailView: View {
                                         selectedChapters.insert(chapter.slug)
                                     }
                                 } else {
-                                    guard !sortedChapters.isEmpty else {
+                                    guard !manga.chapters.isEmpty else {
                                         showChapterError = true
                                         return
                                     }
@@ -292,14 +288,14 @@ struct MangaDetailView: View {
                     }
                 }
 
-                if let firstChapter = sortedChapters.min(by: { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }) {
+                if let firstChapter = manga.chapters.min(by: { (Double($0.number) ?? 0) < (Double($1.number) ?? 0) }) {
                     Button {
-                        guard !sortedChapters.isEmpty else {
+                        guard !manga.chapters.isEmpty else {
                             showChapterError = true
                             return
                         }
                         if let progress = store.history.first(where: { $0.mangaSlug == manga.slug }),
-                           let historyChapter = sortedChapters.first(where: { $0.slug == progress.chapterSlug }) {
+                           let historyChapter = manga.chapters.first(where: { $0.slug == progress.chapterSlug }) {
                             selectedChapter = historyChapter
                         } else {
                             selectedChapter = firstChapter
@@ -376,8 +372,7 @@ struct MangaDetailView: View {
         isLoading = true
         errorMessage = nil
 
-        // في وضع offline نعتمد على بيانات المانجا المخزنة مؤقتاً أو المحملة
-        if let cached = store.mangaCache[slug], !showOnlyDownloaded {
+        if let cached = store.mangaCache[slug] {
             await MainActor.run {
                 manga = cached
                 isLoading = false
@@ -389,7 +384,7 @@ struct MangaDetailView: View {
             let m = try await MangaService.shared.fetchDetail(slug: slug)
             await MainActor.run {
                 manga = m
-                if !showOnlyDownloaded { store.cacheManga(m) }
+                store.cacheManga(m)
                 isLoading = false
             }
         } catch ZMangaError.cloudflareChallenge {

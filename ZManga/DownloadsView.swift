@@ -1,34 +1,35 @@
 import SwiftUI
 
+// MARK: - كائن مساعد للتنقل (يدعم Identifiable)
+struct DownloadedChapterSelection: Identifiable {
+    let id = UUID()
+    let manga: Manga
+    let chapter: Chapter
+    let pages: [String]
+}
+
 struct DownloadsView: View {
     @EnvironmentObject var store: AppStore
     @StateObject private var dm = DownloadManager.shared
-
-    // تجميع المحمّلات حسب المانجا
-    var downloadedManga: [Manga] {
-        var list: [Manga] = []
-        let grouped = Dictionary(grouping: dm.downloads.values, by: { $0.mangaSlug })
-        for (slug, chapters) in grouped {
-            guard let first = chapters.first else { continue }
-            let manga = Manga(
-                slug: slug,
-                title: first.mangaTitle,
-                coverURL: first.mangaCover,
-                chapters: chapters.map {
-                    Chapter(slug: $0.chapterSlug, number: $0.chapterNumber, date: "", pages: $0.pages)
-                }
-            )
-            list.append(manga)
-        }
-        return list.sorted { $0.title < $1.title }
-    }
+    @State private var selectedItem: DownloadedChapterSelection? = nil
 
     var body: some View {
         NavigationView {
             ZStack {
                 ZTheme.bg.ignoresSafeArea()
 
-                if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
+                if !NetworkMonitor.shared.isConnected {
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundColor(ZTheme.textTertiary)
+                        Text("No Internet Connection")
+                            .font(.system(size: 15))
+                            .foregroundColor(ZTheme.textSecondary)
+                        Spacer()
+                    }
+                } else if dm.downloads.isEmpty && dm.activeDownloads.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 48, weight: .ultraLight))
@@ -41,50 +42,24 @@ struct DownloadsView: View {
                     List {
                         if !dm.activeDownloads.isEmpty {
                             Section("Downloading") {
-                                ForEach(dm.queue, id: \.id) { task in
-                                    DownloadingRow(
-                                        mangaTitle: task.mangaTitle,
-                                        chapterNumber: task.chapterNumber,
-                                        progress: dm.progress(mangaSlug: task.mangaSlug, chapterSlug: task.chapterSlug)
-                                    )
+                                ForEach(Array(dm.activeDownloads.keys), id: \.self) { key in
+                                    if let chapter = dm.downloads[key] ?? dm.activeChapterMeta(key) {
+                                        DownloadingRow(key: key, chapter: chapter,
+                                                       progress: dm.activeDownloads[key] ?? 0)
+                                    }
                                 }
                             }
                         }
                         Section("Completed") {
-                            ForEach(downloadedManga) { manga in
-                                NavigationLink(
-                                    destination: MangaDetailView(
-                                        slug: manga.slug,
-                                        preloadTitle: manga.title,
-                                        preloadCover: manga.coverURL,
-                                        showOnlyDownloaded: true
-                                    )
-                                ) {
-                                    HStack(spacing: 12) {
-                                        CachedAsyncImage(url: URL(string: manga.coverURL))
-                                            .frame(width: 50, height: 70)
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(manga.title)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundColor(ZTheme.textPrimary)
-                                                .lineLimit(1)
-                                            Text("\(manga.chapters.count) chapters")
-                                                .font(.system(size: 12))
-                                                .foregroundColor(ZTheme.textSecondary)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .foregroundColor(ZTheme.textTertiary)
-                                    }
+                            ForEach(Array(dm.downloads.values)) { chapter in
+                                DownloadCompleteRow(chapter: chapter) {
+                                    openDownloadedChapter(chapter)
                                 }
                             }
                             .onDelete { indexSet in
                                 for idx in indexSet {
-                                    let manga = downloadedManga[idx]
-                                    for chapter in manga.chapters {
-                                        dm.deleteChapter(mangaSlug: manga.slug, chapterSlug: chapter.slug)
-                                    }
+                                    let ch = Array(dm.downloads.values)[idx]
+                                    dm.deleteChapter(mangaSlug: ch.mangaSlug, chapterSlug: ch.chapterSlug)
                                 }
                             }
                         }
@@ -104,31 +79,101 @@ struct DownloadsView: View {
             }
             .navigationTitle("Downloads")
             .navigationBarTitleDisplayMode(.inline)
+            .fullScreenCover(item: $selectedItem) { item in
+                ReaderView(manga: item.manga, chapter: item.chapter,
+                           allChapters: [item.chapter],
+                           initialPage: 0, preloadedPages: item.pages)
+                    .environmentObject(store)
+            }
         }
+    }
+
+    private func openDownloadedChapter(_ chapter: DownloadManager.DownloadedChapter) {
+        guard let pages = dm.getPages(mangaSlug: chapter.mangaSlug, chapterSlug: chapter.chapterSlug) else { return }
+        let manga = Manga(slug: chapter.mangaSlug, title: chapter.mangaTitle, coverURL: chapter.mangaCover)
+        let chap = Chapter(slug: chapter.chapterSlug, number: chapter.chapterNumber, pages: pages)
+        selectedItem = DownloadedChapterSelection(manga: manga, chapter: chap, pages: pages)
+    }
+}
+
+extension DownloadManager {
+    func activeChapterMeta(_ key: String) -> DownloadedChapter? {
+        let parts = key.components(separatedBy: "_")
+        guard parts.count == 2 else { return nil }
+        return DownloadedChapter(
+            mangaSlug: parts[0], chapterSlug: parts[1],
+            chapterNumber: "?", mangaTitle: "Loading...",
+            mangaCover: "", pages: [], downloadedAt: Date()
+        )
     }
 }
 
 struct DownloadingRow: View {
-    let mangaTitle: String
-    let chapterNumber: String
+    let key: String
+    let chapter: DownloadManager.DownloadedChapter
     let progress: Double
 
     var body: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
+            if !chapter.mangaCover.isEmpty {
+                CachedAsyncImage(url: URL(string: chapter.mangaCover))
+                    .frame(width: 50, height: 70)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
+            }
             VStack(alignment: .leading, spacing: 4) {
-                Text(mangaTitle)
+                Text(chapter.mangaTitle)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(ZTheme.textPrimary)
                     .lineLimit(1)
-                Text("Chapter \(chapterNumber)")
+                Text("Chapter \(chapter.chapterNumber)")
                     .font(.system(size: 12))
                     .foregroundColor(ZTheme.accent)
                 ProgressView(value: progress)
                     .tint(ZTheme.accent)
                     .scaleEffect(x: 1, y: 2, anchor: .center)
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: 11))
+                    .foregroundColor(ZTheme.textTertiary)
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct DownloadCompleteRow: View {
+    let chapter: DownloadManager.DownloadedChapter
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        Button {
+            action?()
+        } label: {
+            HStack(spacing: 12) {
+                if !chapter.mangaCover.isEmpty {
+                    CachedAsyncImage(url: URL(string: chapter.mangaCover))
+                        .frame(width: 50, height: 70)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                } else {
+                    RoundedRectangle(cornerRadius: 6).fill(ZTheme.card).frame(width: 50, height: 70)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(chapter.mangaTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(ZTheme.textPrimary)
+                        .lineLimit(1)
+                    Text("Chapter \(chapter.chapterNumber)")
+                        .font(.system(size: 12))
+                        .foregroundColor(ZTheme.textSecondary)
+                    Text("Downloaded \(chapter.downloadedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.system(size: 11))
+                        .foregroundColor(ZTheme.textTertiary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundColor(ZTheme.textTertiary)
+            }
+        }
     }
 }

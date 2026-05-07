@@ -3,11 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("autoLoadNextChapter") var autoLoadNextChapter = true
-    @AppStorage("tapToScroll") var tapToScroll = true
-    @AppStorage("doubleTapUIToggle") var doubleTapUIToggle = true
-    @AppStorage("enablePinchZoom") var enablePinchZoom = true
-    @AppStorage("preloadNextChapter") var preloadNextChapter = true
-    @AppStorage("highQualityImages") var highQualityImages = true
 
     var body: some View {
         NavigationView {
@@ -16,22 +11,6 @@ struct SettingsView: View {
                 List {
                     Section("Reading") {
                         Toggle("Auto-load next chapter", isOn: $autoLoadNextChapter)
-                            .tint(ZTheme.accent)
-                    }
-
-                    Section("Reader Controls") {
-                        Toggle("Tap to Scroll", isOn: $tapToScroll)
-                            .tint(ZTheme.accent)
-                        Toggle("Double Tap to Toggle UI", isOn: $doubleTapUIToggle)
-                            .tint(ZTheme.accent)
-                        Toggle("Pinch to Zoom", isOn: $enablePinchZoom)
-                            .tint(ZTheme.accent)
-                    }
-
-                    Section("Performance") {
-                        Toggle("Preload Next Chapter", isOn: $preloadNextChapter)
-                            .tint(ZTheme.accent)
-                        Toggle("High Quality Images", isOn: $highQualityImages)
                             .tint(ZTheme.accent)
                     }
 
@@ -65,7 +44,7 @@ struct SettingsView: View {
                         HStack {
                             Text("Version")
                             Spacer()
-                            Text("2.0").foregroundColor(ZTheme.textTertiary)
+                            Text("1.0").foregroundColor(ZTheme.textTertiary)
                         }
                     }
                 }

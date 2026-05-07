@@ -7,7 +7,7 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    // WebView مخصص فقط لتحميل صفحات الفصول (lazy loading) ولتجاوز Cloudflare
+    // WebView مخصص فقط لتحميل صفحات الفصول (lazy loading)
     private var chapterWebView: WKWebView?
 
     private func getChapterWebView() -> WKWebView {
@@ -20,10 +20,11 @@ class MangaService: NSObject, ObservableObject {
         return wv
     }
 
-    // MARK: - fetchHTML عبر URLSession مباشرة
+    // MARK: - fetchHTML عبر URLSession مباشرة (أسرع بكثير من WKWebView)
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
+        // نسخ كوكيز Cloudflare من WKWebView إلى URLSession
         let wkCookies: [HTTPCookie] = await withCheckedContinuation { cont in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cont.resume(returning: $0) }
         }
@@ -38,6 +39,7 @@ class MangaService: NSObject, ObservableObject {
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("ar,en;q=0.9", forHTTPHeaderField: "Accept-Language")
 
+        // أرسل الكوكيز يدوياً
         let cookieHeader = (HTTPCookieStorage.shared.cookies(for: url) ?? [])
             .map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
@@ -55,6 +57,7 @@ class MangaService: NSObject, ObservableObject {
             throw URLError(.badServerResponse)
         }
 
+        // إذا Cloudflare رجع 403 أو صفحة تحقق
         let html = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .isoLatin1)
             ?? ""
@@ -66,6 +69,7 @@ class MangaService: NSObject, ObservableObject {
             html.contains("Attention Required")
 
         if isCloudflare {
+            // نحتاج WKWebView لتجاوز Cloudflare
             let wvHTML = try await fetchHTMLViaWebView(url: url)
             if wvHTML.contains("Just a moment") || wvHTML.contains("Checking your browser") {
                 AppStore.currentStore?.triggerCloudflare(url: url)
@@ -164,7 +168,7 @@ class MangaService: NSObject, ObservableObject {
         // 1. جلب HTML أولاً عبر URLSession للحصول على chapter_id
         let html = try await fetchHTML(urlString: urlString)
 
-        // 2. محاولة AJAX (الأسرع)
+        // 2. محاولة AJAX (الأسرع) — لا يحتاج WKWebView
         let chapterIdPattern = #"(?:wp-manga-current-chap[^>]+data-id|data-id)="(\d+)""#
         if let chapterId = firstCapture(pattern: chapterIdPattern, in: html) {
             if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
@@ -181,10 +185,12 @@ class MangaService: NSObject, ObservableObject {
         wv.navigationDelegate = nil
         wv.stopLoading()
 
+        // تحميل الصفحة في WKWebView وانتظار الـ lazy loading
         let finalHTML = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             let nav = NavDelegate()
             nav.onFinish = {
                 wv.navigationDelegate = nil
+                // انتظر الـ lazy loading بعد didFinish
                 let waitJS = """
                 new Promise((resolve) => {
                     let tries = 0;
@@ -245,6 +251,7 @@ class MangaService: NSObject, ObservableObject {
             forHTTPHeaderField: "User-Agent"
         )
 
+        // الكوكيز
         let wkCookies: [HTTPCookie] = await withCheckedContinuation { cont in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cont.resume(returning: $0) }
         }
@@ -409,7 +416,7 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages (تجاهل صور الأغلفة)
+    // MARK: - Parse Chapter Pages
 
     private func parseChapterPages(html: String) -> [String] {
         let content = extractReadingContent(html: html)
@@ -424,8 +431,6 @@ class MangaService: NSObject, ObservableObject {
         imgRegex.enumerateMatches(in: content, range: NSRange(location: 0, length: nsContent.length)) { match, _, _ in
             guard let match = match else { return }
             let tag = nsContent.substring(with: match.range)
-            // تجاهل الصور التي لا تحمل أي من هذه السمات (صور أغلفة، أيقونات، إلخ)
-            guard tag.contains("wp-manga-chapter-img") || tag.contains("data-src") || tag.contains("data-lazy-src") else { return }
             let url = firstCapture(pattern: #"data-lazy-src="([^"]+)""#, in: tag)
                    ?? firstCapture(pattern: #"data-src="([^"]+)""#, in: tag)
                    ?? firstCapture(pattern: #"\bsrc="([^"]+)""#, in: tag)

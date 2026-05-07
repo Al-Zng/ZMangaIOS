@@ -292,7 +292,7 @@ struct PopularCard: View {
     }
 }
 
-// MARK: - Latest Update Row (مع استبدال التقييم برقم الفصل)
+// MARK: - Latest Update Row
 struct LatestUpdateRow: View {
     let manga: Manga
     var body: some View {

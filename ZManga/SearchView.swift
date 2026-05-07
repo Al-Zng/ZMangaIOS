@@ -195,13 +195,7 @@ struct SearchView: View {
                 } else {
                     items = try await MangaService.shared.search(query: query, page: page)
                 }
-                await MainActor.run {
-                    let all = results + items
-                    var seen = Set<String>()
-                    results = all.filter { seen.insert($0.slug).inserted }
-                    loadingMore = false
-                    hasMore = !items.isEmpty
-                }
+                await MainActor.run { results.append(contentsOf: items); loadingMore = false; hasMore = !items.isEmpty }
             } catch { await MainActor.run { loadingMore = false } }
         }
     }
