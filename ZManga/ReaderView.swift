@@ -1,14 +1,20 @@
+// ReaderView.swift
+
 import SwiftUI
 
 struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) var dismiss
+    @AppStorage("tapToScrollEnabled") var tapToScrollEnabled = false
+    @AppStorage("zoomEnabled") var zoomEnabled = false
+    @AppStorage("optimizationEnabled") var optimizationEnabled = false
 
     let manga: Manga
     let chapter: Chapter
     let allChapters: [Chapter]
     var initialPage: Int = 0
     var preloadedPages: [String]? = nil
+    var isOfflineMode: Bool = false
 
     @State private var isLoading = true
     @State private var loadingProgress: Double = 0
@@ -24,13 +30,15 @@ struct ReaderView: View {
     @State private var errorMessage: String?
     @State private var chapterBoundaries: [(slug: String, startIndex: Int)] = []
     @State private var visiblePage = 0
+    @State private var scrollProxy: ScrollViewProxy? = nil
 
-    init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0, preloadedPages: [String]? = nil) {
+    init(manga: Manga, chapter: Chapter, allChapters: [Chapter], initialPage: Int = 0, preloadedPages: [String]? = nil, isOfflineMode: Bool = false) {
         self.manga = manga
         self.chapter = chapter
         self.allChapters = allChapters
         self.initialPage = initialPage
         self.preloadedPages = preloadedPages
+        self.isOfflineMode = isOfflineMode
         _currentChapterSlug = State(initialValue: chapter.slug)
     }
 
@@ -38,7 +46,7 @@ struct ReaderView: View {
         guard let lastBoundary = chapterBoundaries.last(where: { $0.startIndex <= currentPage }) else {
             return chapter.number
         }
-        return manga.chapters.first(where: { $0.slug == lastBoundary.slug })?.number ?? chapter.number
+        return allChapters.first(where: { $0.slug == lastBoundary.slug })?.number ?? chapter.number
     }
 
     var body: some View {
@@ -55,27 +63,32 @@ struct ReaderView: View {
                 readerContent
             }
 
-            // زر الإغلاق
+            // زر الإغلاق - أكبر وأعلى
             VStack {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(width: 34, height: 34)
-                            .background(.black.opacity(0.7))
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.5), radius: 4)
+                if showUI {
+                    HStack {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(width: 40, height: 40)
+                                .background(.black.opacity(0.7))
+                                .clipShape(Circle())
+                                .shadow(color: .black.opacity(0.5), radius: 4)
+                        }
+                        Spacer()
                     }
-                    Spacer()
+                    .padding(.top, 50)
+                    .padding(.leading, 16)
                 }
-                .padding(.top, 56)
-                .padding(.leading, 16)
                 Spacer()
             }
 
             if showUI && !allPages.isEmpty { topBar }
-            VStack { Spacer(); bottomBar }
+            VStack {
+                Spacer()
+                if showUI && !allPages.isEmpty { bottomBarWithProgress }
+            }
         }
         .ignoresSafeArea(edges: .bottom)
         .statusBarHidden(!showUI)
@@ -120,47 +133,111 @@ struct ReaderView: View {
     // MARK: - Reader Content
     var readerContent: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
-                        if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
-                            ChapterSeparator(number: manga.chapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
-                                .id("sep_\(idx)")
+            if optimizationEnabled {
+                // Optimized ScrollView
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
+                            if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
+                                ChapterSeparator(number: allChapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
+                                    .id("sep_\(idx)")
+                            }
+                            OptimizedMangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
+                                .id(idx)
+                                .background(GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: PageOffsetKey.self,
+                                        value: [idx: geo.frame(in: .named("reader_space")).minY]
+                                    )
+                                })
                         }
-                        MangaPageImage(url: page.url)
-                            .id(idx)
-                            .background(GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: PageOffsetKey.self,
-                                    value: [idx: geo.frame(in: .named("reader_space")).minY]
-                                )
-                            })
                     }
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: ScrollOffsetKey.self,
+                            value: proxy.frame(in: .named("reader_space")).minY
+                        )
+                    })
                 }
-                .background(GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: ScrollOffsetKey.self,
-                        value: proxy.frame(in: .named("reader_space")).minY
-                    )
-                })
-            }
-            .coordinateSpace(name: "reader_space")
-            .onPreferenceChange(PageOffsetKey.self) { offsets in
-                guard !offsets.isEmpty else { return }
-                let closest = offsets.min(by: { abs($0.value) < abs($1.value) })
-                if let closest = closest, closest.key != visiblePage {
-                    visiblePage = closest.key
-                    currentPage = visiblePage
-                    saveProgress(pageIndex: visiblePage)
-                    if visiblePage >= allPages.count - 5 && !loadingNextChapter {
-                        Task { await loadNextChapter() }
+                .coordinateSpace(name: "reader_space")
+                .onPreferenceChange(PageOffsetKey.self) { offsets in
+                    handlePageOffsetChange(offsets)
+                }
+                .onAppear {
+                    scrollProxy = proxy
+                    proxy.scrollTo(initialPage, anchor: .top)
+                }
+                .onTapGesture { handleTap() }
+            } else {
+                // Standard ScrollView
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
+                            if let boundary = chapterBoundaries.first(where: { $0.startIndex == idx }), idx > 0 {
+                                ChapterSeparator(number: allChapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
+                                    .id("sep_\(idx)")
+                            }
+                            MangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
+                                .id(idx)
+                                .background(GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: PageOffsetKey.self,
+                                        value: [idx: geo.frame(in: .named("reader_space")).minY]
+                                    )
+                                })
+                        }
                     }
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: ScrollOffsetKey.self,
+                            value: proxy.frame(in: .named("reader_space")).minY
+                        )
+                    })
                 }
+                .coordinateSpace(name: "reader_space")
+                .onPreferenceChange(PageOffsetKey.self) { offsets in
+                    handlePageOffsetChange(offsets)
+                }
+                .onAppear {
+                    scrollProxy = proxy
+                    proxy.scrollTo(initialPage, anchor: .top)
+                }
+                .onTapGesture { handleTap() }
             }
-            .onAppear { proxy.scrollTo(initialPage, anchor: .top) }
-            .onTapGesture {
+        }
+    }
+
+    // MARK: - Tap Handling
+    private func handleTap() {
+        if tapToScrollEnabled {
+            // Single tap scrolls down slightly
+            withAnimation {
+                scrollProxy?.scrollTo(currentPage + 1, anchor: .top)
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
+            if showUI { resetUITimer() }
+        }
+    }
+
+    // Gesture for double tap
+    var doubleTapGesture: some Gesture {
+        TapGesture(count: 2)
+            .onEnded {
                 withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
                 if showUI { resetUITimer() }
+            }
+    }
+
+    private func handlePageOffsetChange(_ offsets: [Int: CGFloat]) {
+        guard !offsets.isEmpty else { return }
+        let closest = offsets.min(by: { abs($0.value) < abs($1.value) })
+        if let closest = closest, closest.key != visiblePage {
+            visiblePage = closest.key
+            currentPage = visiblePage
+            saveProgress(pageIndex: visiblePage)
+            if visiblePage >= allPages.count - 5 && !loadingNextChapter {
+                Task { await loadNextChapter() }
             }
         }
     }
@@ -195,22 +272,38 @@ struct ReaderView: View {
         .transition(.opacity)
     }
 
-    // MARK: - Bottom Bar
-    var bottomBar: some View {
-        Group {
-            if !allPages.isEmpty {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Rectangle().fill(Color.white.opacity(0.08))
-                        Rectangle()
-                            .fill(ZTheme.accent)
-                            .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
-                            .animation(.easeOut(duration: 0.15), value: currentPage)
-                    }
-                }
-                .frame(height: 2)
+    // MARK: - Bottom Bar with Progress
+    var bottomBarWithProgress: some View {
+        VStack(spacing: 0) {
+            // Progress text
+            HStack {
+                Spacer()
+                Text("\(currentPage + 1) / \(allPages.count)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.5))
+                    .clipShape(Capsule())
+                Spacer()
             }
+            .padding(.bottom, 8)
+
+            // Progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Color.white.opacity(0.08))
+                    Rectangle()
+                        .fill(ZTheme.accent)
+                        .frame(width: geo.size.width * CGFloat(currentPage + 1) / CGFloat(max(allPages.count, 1)))
+                        .animation(.easeOut(duration: 0.15), value: currentPage)
+                }
+            }
+            .frame(height: 2)
         }
+        .padding(.bottom, 20)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+        .transition(.opacity)
     }
 
     // MARK: - Empty / Error
@@ -264,7 +357,6 @@ struct ReaderView: View {
         }
 
         totalPages = pagesToLoad.count
-        // محاكاة تحميل الصفحات (اختياري لكن لإظهار شريط التقدم)
         for i in 0..<min(pagesToLoad.count, 3) {
             await MainActor.run {
                 loadedPagesCount = i + 1
@@ -295,6 +387,9 @@ struct ReaderView: View {
         let urls: [String]
         if let local = DownloadManager.shared.getPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug) {
             urls = local
+        } else if isOfflineMode {
+            await MainActor.run { loadingNextChapter = false }
+            return
         } else {
             do {
                 urls = try await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: nextChapter.slug)
@@ -319,7 +414,7 @@ struct ReaderView: View {
             }
             return chapter.slug
         }()
-        let chapterNum = manga.chapters.first(where: { $0.slug == chapterSlug })?.number ?? chapter.number
+        let chapterNum = allChapters.first(where: { $0.slug == chapterSlug })?.number ?? chapter.number
         let localPageIndex = pageIndex - (chapterBoundaries.first(where: { $0.slug == chapterSlug })?.startIndex ?? 0)
         let progress = ReadingProgress(
             mangaSlug: manga.slug, mangaTitle: manga.title, mangaCover: manga.coverURL,
@@ -348,10 +443,13 @@ struct ScrollOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-// MARK: - MangaPageImage (تدعم الصور المحلية)
+// MARK: - MangaPageImage (تدعم الصور المحلية + zoom)
 struct MangaPageImage: View {
     let url: String
+    var zoomEnabled: Bool = false
     @State private var localImage: UIImage?
+    @State private var currentScale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
 
     var body: some View {
         Group {
@@ -360,16 +458,103 @@ struct MangaPageImage: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity)
+                    .scaleEffect(currentScale)
+                    .gesture(
+                        zoomEnabled ?
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                currentScale = min(max(currentScale * delta, 1), 4)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                            }
+                        : nil
+                    )
             } else {
                 CachedAsyncImage(url: URL(string: url))
                     .scaledToFit()
                     .frame(maxWidth: .infinity)
+                    .scaleEffect(currentScale)
+                    .gesture(
+                        zoomEnabled ?
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                currentScale = min(max(currentScale * delta, 1), 4)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                            }
+                        : nil
+                    )
             }
         }
         .background(Color.black)
         .onAppear {
             if !url.hasPrefix("http") {
-                // مسار ملف محلي
+                localImage = UIImage(contentsOfFile: url)
+            }
+        }
+    }
+}
+
+// MARK: - Optimized Manga Page Image
+struct OptimizedMangaPageImage: View {
+    let url: String
+    var zoomEnabled: Bool = false
+    @State private var localImage: UIImage?
+    @State private var currentScale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+
+    var body: some View {
+        Group {
+            if let img = localImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .scaleEffect(currentScale)
+                    .drawingGroup()
+                    .gesture(
+                        zoomEnabled ?
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                currentScale = min(max(currentScale * delta, 1), 4)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                            }
+                        : nil
+                    )
+            } else {
+                CachedAsyncImage(url: URL(string: url))
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .scaleEffect(currentScale)
+                    .drawingGroup()
+                    .gesture(
+                        zoomEnabled ?
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                currentScale = min(max(currentScale * delta, 1), 4)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                            }
+                        : nil
+                    )
+            }
+        }
+        .background(Color.black)
+        .onAppear {
+            if !url.hasPrefix("http") {
                 localImage = UIImage(contentsOfFile: url)
             }
         }
