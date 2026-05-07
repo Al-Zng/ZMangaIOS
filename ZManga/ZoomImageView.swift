@@ -4,7 +4,6 @@ import SwiftUI
 
 struct ZoomableImageView: UIViewRepresentable {
     let url: String
-    @State private var image: UIImage?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -66,7 +65,7 @@ struct ZoomableImageView: UIViewRepresentable {
                         scrollView.zoomScale = scale
                     }
                 } catch {
-                    // handle error silently
+                    // ignore
                 }
             } else {
                 if let img = UIImage(contentsOfFile: url) {
