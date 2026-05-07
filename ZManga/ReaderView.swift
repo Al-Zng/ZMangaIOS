@@ -63,19 +63,22 @@ struct ReaderView: View {
                 readerContent
             }
 
-            // زر الإغلاق - أكبر وأعلى
+            // زر الإغلاق - كبير وسهل الضغط (منفصل عن إيماءات الـ ScrollView)
             VStack {
                 if showUI {
                     HStack {
-                        Button { dismiss() } label: {
+                        Button {
+                            dismiss()
+                        } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 18, weight: .bold))
                                 .foregroundColor(.white)
                                 .frame(width: 48, height: 48)
-                                .background(.black.opacity(0.7))
+                                .background(.black.opacity(0.8))
                                 .clipShape(Circle())
-                                .shadow(color: .black.opacity(0.5), radius: 4)
+                                .shadow(color: .black.opacity(0.6), radius: 6, y: 2)
                         }
+                        .contentShape(Circle())
                         Spacer()
                     }
                     .padding(.top, 50)
@@ -83,6 +86,7 @@ struct ReaderView: View {
                 }
                 Spacer()
             }
+            .zIndex(2)
 
             if showUI && !allPages.isEmpty { topBar }
             VStack {
@@ -134,7 +138,6 @@ struct ReaderView: View {
     var readerContent: some View {
         ScrollViewReader { proxy in
             if optimizationEnabled {
-                // Optimized ScrollView
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
@@ -167,10 +170,9 @@ struct ReaderView: View {
                     scrollProxy = proxy
                     proxy.scrollTo(initialPage, anchor: .top)
                 }
-                .gesture(doubleTapGesture)
+                .simultaneousGesture(doubleTapGesture)
                 .onTapGesture { handleTap() }
             } else {
-                // Standard ScrollView
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(allPages.enumerated()), id: \.offset) { idx, page in
@@ -203,7 +205,7 @@ struct ReaderView: View {
                     scrollProxy = proxy
                     proxy.scrollTo(initialPage, anchor: .top)
                 }
-                .gesture(doubleTapGesture)
+                .simultaneousGesture(doubleTapGesture)
                 .onTapGesture { handleTap() }
             }
         }
@@ -212,8 +214,8 @@ struct ReaderView: View {
     // MARK: - Tap Handling
     private func handleTap() {
         if tapToScrollEnabled {
-            withAnimation {
-                scrollProxy?.scrollTo(currentPage + 1, anchor: .top)
+            withAnimation(.easeInOut(duration: 0.15)) {
+                scrollProxy?.scrollTo(min(currentPage + 1, allPages.count - 1), anchor: .top)
             }
         } else {
             withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
@@ -221,7 +223,6 @@ struct ReaderView: View {
         }
     }
 
-    // إيماءة الضغط المزدوج – تعمل دائمًا لإظهار/إخفاء UI
     private var doubleTapGesture: some Gesture {
         TapGesture(count: 2)
             .onEnded {
@@ -276,7 +277,6 @@ struct ReaderView: View {
     // MARK: - Bottom Bar with Progress
     var bottomBarWithProgress: some View {
         VStack(spacing: 0) {
-            // Progress text
             HStack {
                 Spacer()
                 Text("\(currentPage + 1) / \(allPages.count)")
@@ -290,7 +290,6 @@ struct ReaderView: View {
             }
             .padding(.bottom, 8)
 
-            // Progress bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Rectangle().fill(Color.white.opacity(0.08))
@@ -452,6 +451,10 @@ struct MangaPageImage: View {
     @State private var currentScale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
 
+    private var isLocalFile: Bool {
+        !url.hasPrefix("http://") && !url.hasPrefix("https://")
+    }
+
     var body: some View {
         Group {
             if let img = localImage {
@@ -472,6 +475,16 @@ struct MangaPageImage: View {
                                 lastScale = 1.0
                             }
                         : nil
+                    )
+            } else if isLocalFile && localImage == nil {
+                // لم يتم تحميل الصورة المحلية بعد - إظهار placeholder مؤقت
+                Rectangle()
+                    .fill(Color(white: 0.12))
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(2/3, contentMode: .fit)
+                    .overlay(
+                        ProgressView()
+                            .tint(ZTheme.accent)
                     )
             } else {
                 CachedAsyncImage(url: URL(string: url))
@@ -495,8 +508,13 @@ struct MangaPageImage: View {
         }
         .background(Color.black)
         .onAppear {
-            if !url.hasPrefix("http") {
-                localImage = UIImage(contentsOfFile: url)
+            if isLocalFile {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let img = UIImage(contentsOfFile: url)
+                    DispatchQueue.main.async {
+                        localImage = img
+                    }
+                }
             }
         }
     }
@@ -510,6 +528,10 @@ struct OptimizedMangaPageImage: View {
     @State private var currentScale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
 
+    private var isLocalFile: Bool {
+        !url.hasPrefix("http://") && !url.hasPrefix("https://")
+    }
+
     var body: some View {
         Group {
             if let img = localImage {
@@ -531,6 +553,15 @@ struct OptimizedMangaPageImage: View {
                                 lastScale = 1.0
                             }
                         : nil
+                    )
+            } else if isLocalFile && localImage == nil {
+                Rectangle()
+                    .fill(Color(white: 0.12))
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(2/3, contentMode: .fit)
+                    .overlay(
+                        ProgressView()
+                            .tint(ZTheme.accent)
                     )
             } else {
                 CachedAsyncImage(url: URL(string: url))
@@ -555,8 +586,13 @@ struct OptimizedMangaPageImage: View {
         }
         .background(Color.black)
         .onAppear {
-            if !url.hasPrefix("http") {
-                localImage = UIImage(contentsOfFile: url)
+            if isLocalFile {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let img = UIImage(contentsOfFile: url)
+                    DispatchQueue.main.async {
+                        localImage = img
+                    }
+                }
             }
         }
     }
