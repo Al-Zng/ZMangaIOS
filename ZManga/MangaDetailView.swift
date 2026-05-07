@@ -1,3 +1,5 @@
+// MangaDetailView.swift
+
 import SwiftUI
 
 struct MangaDetailView: View {
@@ -14,6 +16,8 @@ struct MangaDetailView: View {
     @State private var showChapterError = false
     @State private var multiSelectMode = false
     @State private var selectedChapters = Set<String>()
+    @State private var downloadingChapters = Set<String>()
+    @StateObject private var dm = DownloadManager.shared
 
     var sortedChapters: [Chapter] {
         guard let m = manga else { return [] }
@@ -169,7 +173,7 @@ struct MangaDetailView: View {
                 if multiSelectMode {
                     HStack {
                         Button("Download (\(selectedChapters.count))") {
-                            Task { await downloadSelectedChapters(manga) }
+                            downloadSelectedChaptersSequentially(manga)
                             multiSelectMode = false
                         }
                         .buttonStyle(.borderedProminent)
@@ -189,8 +193,8 @@ struct MangaDetailView: View {
                             chapter: chapter,
                             manga: manga,
                             progress: store.history.first { $0.mangaSlug == manga.slug && $0.chapterSlug == chapter.slug },
-                            isDownloaded: DownloadManager.shared.isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
-                            isDownloading: DownloadManager.shared.isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug),
+                            isDownloaded: dm.isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
+                            isDownloading: dm.isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) || downloadingChapters.contains(chapter.slug),
                             isSelected: selectedChapters.contains(chapter.slug),
                             multiSelectMode: multiSelectMode,
                             action: {
@@ -210,12 +214,11 @@ struct MangaDetailView: View {
                             },
                             downloadAction: {
                                 Task {
-                                    guard let pages = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else { return }
-                                    await DownloadManager.shared.downloadChapter(manga: manga, chapter: chapter, pages: pages)
+                                    await downloadSingleChapter(manga: manga, chapter: chapter)
                                 }
                             },
                             deleteDownloadAction: {
-                                DownloadManager.shared.deleteChapter(mangaSlug: manga.slug, chapterSlug: chapter.slug)
+                                dm.deleteChapter(mangaSlug: manga.slug, chapterSlug: chapter.slug)
                             },
                             markReadAction: { isRead in
                                 if isRead {
@@ -397,13 +400,29 @@ struct MangaDetailView: View {
         }
     }
 
-    private func downloadSelectedChapters(_ manga: Manga) async {
-        for slug in selectedChapters {
-            if let chapter = manga.chapters.first(where: { $0.slug == slug }) {
-                await DownloadManager.shared.downloadChapter(manga: manga, chapter: chapter)
+    private func downloadSingleChapter(manga: Manga, chapter: Chapter) async {
+        downloadingChapters.insert(chapter.slug)
+        guard let pages = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else {
+            downloadingChapters.remove(chapter.slug)
+            return
+        }
+        await dm.downloadChapter(manga: manga, chapter: chapter, pages: pages)
+        downloadingChapters.remove(chapter.slug)
+    }
+
+    private func downloadSelectedChaptersSequentially(_ manga: Manga) {
+        let chaptersToDownload = manga.chapters.filter { selectedChapters.contains($0.slug) }
+        selectedChapters.removeAll()
+        
+        Task {
+            for chapter in chaptersToDownload {
+                downloadingChapters.insert(chapter.slug)
+                if let pages = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) {
+                    await dm.downloadChapter(manga: manga, chapter: chapter, pages: pages)
+                }
+                downloadingChapters.remove(chapter.slug)
             }
         }
-        selectedChapters.removeAll()
     }
 }
 
