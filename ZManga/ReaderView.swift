@@ -69,9 +69,9 @@ struct ReaderView: View {
                     HStack {
                         Button { dismiss() } label: {
                             Image(systemName: "xmark")
-                                .font(.system(size: 16, weight: .bold))
+                                .font(.system(size: 18, weight: .bold))
                                 .foregroundColor(.white)
-                                .frame(width: 40, height: 40)
+                                .frame(width: 48, height: 48)
                                 .background(.black.opacity(0.7))
                                 .clipShape(Circle())
                                 .shadow(color: .black.opacity(0.5), radius: 4)
@@ -142,7 +142,7 @@ struct ReaderView: View {
                                 ChapterSeparator(number: allChapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
                                     .id("sep_\(idx)")
                             }
-                            OptimizedMangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
+                            OptimizedMangaPageImage(url: page.url, zoomEnabled: zoomEnabled && !tapToScrollEnabled)
                                 .id(idx)
                                 .background(GeometryReader { geo in
                                     Color.clear.preference(
@@ -177,7 +177,7 @@ struct ReaderView: View {
                                 ChapterSeparator(number: allChapters.first(where: { $0.slug == boundary.slug })?.number ?? "??")
                                     .id("sep_\(idx)")
                             }
-                            MangaPageImage(url: page.url, zoomEnabled: zoomEnabled)
+                            MangaPageImage(url: page.url, zoomEnabled: zoomEnabled && !tapToScrollEnabled)
                                 .id(idx)
                                 .background(GeometryReader { geo in
                                     Color.clear.preference(
@@ -218,15 +218,6 @@ struct ReaderView: View {
             withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
             if showUI { resetUITimer() }
         }
-    }
-
-    // Gesture for double tap
-    var doubleTapGesture: some Gesture {
-        TapGesture(count: 2)
-            .onEnded {
-                withAnimation(.easeInOut(duration: 0.2)) { showUI.toggle() }
-                if showUI { resetUITimer() }
-            }
     }
 
     private func handlePageOffsetChange(_ offsets: [Int: CGFloat]) {
