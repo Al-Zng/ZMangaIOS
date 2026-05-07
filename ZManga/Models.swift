@@ -92,14 +92,11 @@ struct ReadingProgress: Identifiable, Codable {
     }
 }
 
-// MARK: - Download Manager (sequential queue)
+// MARK: - Download Manager (مع غلاف وحجم)
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
     @Published var downloads: [String: DownloadedChapter] = [:]
     @Published var activeDownloads: [String: Double] = [:]
-    @Published var downloadQueue: [String] = []           // ordered queue of keys
-    private var queuedMeta: [String: DownloadedChapter] = [:]  // meta for queued items
-    private var isProcessingQueue = false
     private let downloadsKey = "zmanga_downloads"
 
     init() { load() }
@@ -126,77 +123,28 @@ class DownloadManager: ObservableObject {
     }
 
     func isDownloading(mangaSlug: String, chapterSlug: String) -> Bool {
-        let key = "\(mangaSlug)_\(chapterSlug)"
-        return activeDownloads[key] != nil || downloadQueue.contains(key)
+        activeDownloads["\(mangaSlug)_\(chapterSlug)"] != nil
     }
 
     func progress(mangaSlug: String, chapterSlug: String) -> Double {
         activeDownloads["\(mangaSlug)_\(chapterSlug)"] ?? 0
     }
 
-    // Enqueue a chapter for sequential download
-    @MainActor
-    func enqueueChapter(manga: Manga, chapter: Chapter, pages: [String]? = nil) {
-        let key = "\(manga.slug)_\(chapter.slug)"
-        guard !isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
-              !downloadQueue.contains(key),
-              activeDownloads[key] == nil else { return }
-
-        let meta = DownloadedChapter(
-            mangaSlug: manga.slug,
-            chapterSlug: chapter.slug,
-            chapterNumber: chapter.number,
-            mangaTitle: manga.title,
-            mangaCover: manga.coverURL,
-            pages: pages ?? [],
-            downloadedAt: Date()
-        )
-        queuedMeta[key] = meta
-        downloadQueue.append(key)
-
-        if !isProcessingQueue {
-            Task { await processQueue() }
-        }
-    }
-
     @MainActor
     func downloadChapter(manga: Manga, chapter: Chapter, pages: [String]? = nil) async {
-        await enqueueChapter(manga: manga, chapter: chapter, pages: pages)
-    }
+        let key = "\(manga.slug)_\(chapter.slug)"
+        guard !isDownloaded(mangaSlug: manga.slug, chapterSlug: chapter.slug),
+              !isDownloading(mangaSlug: manga.slug, chapterSlug: chapter.slug) else { return }
 
-    @MainActor
-    private func processQueue() async {
-        guard !isProcessingQueue else { return }
-        isProcessingQueue = true
-
-        while !downloadQueue.isEmpty {
-            let key = downloadQueue[0]
-            guard let meta = queuedMeta[key] else {
-                downloadQueue.removeFirst()
-                continue
-            }
-
-            await performDownload(key: key, meta: meta)
-            downloadQueue.removeFirst()
-            queuedMeta.removeValue(forKey: key)
-        }
-
-        isProcessingQueue = false
-    }
-
-    @MainActor
-    private func performDownload(key: String, meta: DownloadedChapter) async {
         activeDownloads[key] = 0.0
-        let dir = getChapterDir(mangaSlug: meta.mangaSlug, chapterSlug: meta.chapterSlug)
+        let dir = getChapterDir(mangaSlug: manga.slug, chapterSlug: chapter.slug)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
         let urls: [String]
-        if !meta.pages.isEmpty {
-            urls = meta.pages
+        if let pages = pages {
+            urls = pages
         } else {
-            guard let fetched = try? await MangaService.shared.fetchChapterPages(
-                mangaSlug: meta.mangaSlug, chapterSlug: meta.chapterSlug
-            ) else {
+            guard let fetched = try? await MangaService.shared.fetchChapterPages(mangaSlug: manga.slug, chapterSlug: chapter.slug) else {
                 activeDownloads.removeValue(forKey: key)
                 return
             }
@@ -219,11 +167,11 @@ class DownloadManager: ObservableObject {
         }
 
         let downloaded = DownloadedChapter(
-            mangaSlug: meta.mangaSlug,
-            chapterSlug: meta.chapterSlug,
-            chapterNumber: meta.chapterNumber,
-            mangaTitle: meta.mangaTitle,
-            mangaCover: meta.mangaCover,
+            mangaSlug: manga.slug,
+            chapterSlug: chapter.slug,
+            chapterNumber: chapter.number,
+            mangaTitle: manga.title,
+            mangaCover: manga.coverURL,
             pages: localPaths,
             downloadedAt: Date()
         )
@@ -245,9 +193,6 @@ class DownloadManager: ObservableObject {
         let downloadsDir = base.appendingPathComponent("downloads")
         try? FileManager.default.removeItem(at: downloadsDir)
         downloads.removeAll()
-        downloadQueue.removeAll()
-        queuedMeta.removeAll()
-        activeDownloads.removeAll()
         save()
     }
 
@@ -284,13 +229,13 @@ class DownloadManager: ObservableObject {
     }
 }
 
-// MARK: - Cloudflare Challenge
+// MARK: - كائن تحدي Cloudflare (يدعم Identifiable للـ sheet)
 struct CloudflareChallenge: Identifiable {
     let id = UUID()
     let url: URL
 }
 
-// MARK: - AppStore
+// MARK: - AppStore (مُعدّل للعمل مع Cloudflare بشكل صحيح)
 class AppStore: ObservableObject {
     static var currentStore: AppStore?
     @Published var history: [ReadingProgress] = []
@@ -366,14 +311,14 @@ class AppStore: ObservableObject {
     private func persistMangaCache() { UserDefaults.standard.set(try? JSONEncoder().encode(mangaCache), forKey: mangaCacheKey) }
     private func loadMangaCache() { if let data = UserDefaults.standard.data(forKey: mangaCacheKey), let d = try? JSONDecoder().decode([String: Manga].self, from: data) { mangaCache = d } }
 
-    // MARK: - Cloudflare
+    // MARK: - Cloudflare (مُعدّلة)
     func triggerCloudflare(url: URL) {
         activeChallenge = CloudflareChallenge(url: url)
     }
     func triggerReload() { reloadTrigger += 1 }
 }
 
-// MARK: - Design Tokens
+// MARK: - Design Tokens (النسخة العربية الذهبية)
 struct ZTheme {
     static let bg       = Color(hex: "#0D0D0D")
     static let surface  = Color(hex: "#161616")
@@ -413,7 +358,7 @@ extension Color {
     }
 }
 
-// MARK: - Cached Async Image
+// MARK: - Cached Async Image (مع Referer ديناميكي وإعادة المحاولة)
 struct CachedAsyncImage: View {
     let url: URL?
     @State private var image: UIImage?
@@ -466,16 +411,6 @@ struct CachedAsyncImage: View {
             isLoading = false; loadFailed = true; return
         }
 
-        // Check local file first (for downloaded pages)
-        if url.isFileURL {
-            if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
-                await MainActor.run { image = img; isLoading = false }
-                return
-            }
-            await MainActor.run { loadFailed = true; isLoading = false }
-            return
-        }
-
         let config = URLSessionConfiguration.default
         config.urlCache = Self.cache
         config.requestCachePolicy = .returnCacheDataElseLoad
@@ -500,6 +435,7 @@ struct CachedAsyncImage: View {
             .map { "\($0.name)=\($0.value)" }
             .joined(separator: "; ")
 
+        // Referer ديناميكي يعتمد على host الفعلي للصورة
         let referer: String
         if let host = url.host {
             let components = host.components(separatedBy: ".")
