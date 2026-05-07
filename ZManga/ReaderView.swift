@@ -348,7 +348,7 @@ struct ScrollOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-// MARK: - MangaPageImage (تدعم تحميل الصور المحلية)
+// MARK: - MangaPageImage (تدعم الصور المحلية)
 struct MangaPageImage: View {
     let url: String
     @State private var localImage: UIImage?
@@ -368,8 +368,9 @@ struct MangaPageImage: View {
         }
         .background(Color.black)
         .onAppear {
-            if !url.hasPrefix("http"), let img = UIImage(contentsOfFile: url) {
-                localImage = img
+            if !url.hasPrefix("http") {
+                // مسار ملف محلي
+                localImage = UIImage(contentsOfFile: url)
             }
         }
     }
