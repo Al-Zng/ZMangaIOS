@@ -252,7 +252,7 @@ struct ReaderView: View {
         .transition(.opacity)
     }
 
-    func emptyPagesView: some View {
+var emptyPagesView: some View {
         VStack(spacing: 20) {
             Image(systemName: "book.closed").font(.system(size: 44, weight: .ultraLight)).foregroundColor(.white.opacity(0.5))
             Text("No pages found").font(.system(size: 14)).foregroundColor(.white.opacity(0.6))
