@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("autoLoadNextChapter") var autoLoadNextChapter = true
+    @AppStorage("tapToScrollEnabled") var tapToScrollEnabled = true
+    @AppStorage("zoomEnabled") var zoomEnabled = true
 
     var body: some View {
         NavigationView {
@@ -11,6 +13,10 @@ struct SettingsView: View {
                 List {
                     Section("Reading") {
                         Toggle("Auto-load next chapter", isOn: $autoLoadNextChapter)
+                            .tint(ZTheme.accent)
+                        Toggle("Tap to Scroll", isOn: $tapToScrollEnabled)
+                            .tint(ZTheme.accent)
+                        Toggle("Zoom", isOn: $zoomEnabled)
                             .tint(ZTheme.accent)
                     }
 
