@@ -20,11 +20,10 @@ class MangaService: NSObject, ObservableObject {
         return wv
     }
 
-    // MARK: - fetchHTML عبر URLSession مباشرة (أسرع بكثير من WKWebView)
+    // MARK: - fetchHTML عبر URLSession مباشرة
     private func fetchHTML(urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
-        // نسخ كوكيز Cloudflare من WKWebView إلى URLSession
         let wkCookies: [HTTPCookie] = await withCheckedContinuation { cont in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cont.resume(returning: $0) }
         }
@@ -39,7 +38,6 @@ class MangaService: NSObject, ObservableObject {
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("ar,en;q=0.9", forHTTPHeaderField: "Accept-Language")
 
-        // أرسل الكوكيز يدوياً
         let cookieHeader = (HTTPCookieStorage.shared.cookies(for: url) ?? [])
             .map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
@@ -57,7 +55,6 @@ class MangaService: NSObject, ObservableObject {
             throw URLError(.badServerResponse)
         }
 
-        // إذا Cloudflare رجع 403 أو صفحة تحقق
         let html = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .isoLatin1)
             ?? ""
@@ -69,7 +66,6 @@ class MangaService: NSObject, ObservableObject {
             html.contains("Attention Required")
 
         if isCloudflare {
-            // نحتاج WKWebView لتجاوز Cloudflare
             let wvHTML = try await fetchHTMLViaWebView(url: url)
             if wvHTML.contains("Just a moment") || wvHTML.contains("Checking your browser") {
                 AppStore.currentStore?.triggerCloudflare(url: url)
@@ -153,15 +149,7 @@ class MangaService: NSObject, ObservableObject {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let html = try await fetchHTML(urlString: "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)")
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { manga in
-                !manga.slug.isEmpty &&
-                !manga.slug.contains("feed") &&
-                !manga.coverURL.isEmpty &&
-                !isLogoOnly(manga.coverURL) &&
-                (manga.title.lowercased().contains(query.lowercased()) ||
-                 manga.slug.lowercased().contains(query.lowercased()) ||
-                 manga.genres.contains(where: { $0.lowercased().contains(query.lowercased()) }))
-            }
+            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
     }
 
     func fetchDetail(slug: String) async throws -> Manga {
@@ -176,7 +164,7 @@ class MangaService: NSObject, ObservableObject {
         // 1. جلب HTML أولاً عبر URLSession للحصول على chapter_id
         let html = try await fetchHTML(urlString: urlString)
 
-        // 2. محاولة AJAX (الأسرع) — لا يحتاج WKWebView
+        // 2. محاولة AJAX (الأسرع)
         let chapterIdPattern = #"(?:wp-manga-current-chap[^>]+data-id|data-id)="(\d+)""#
         if let chapterId = firstCapture(pattern: chapterIdPattern, in: html) {
             if let pages = try? await fetchChapterImagesViaAJAX(chapterId: chapterId), !pages.isEmpty {
@@ -193,12 +181,10 @@ class MangaService: NSObject, ObservableObject {
         wv.navigationDelegate = nil
         wv.stopLoading()
 
-        // تحميل الصفحة في WKWebView وانتظار الـ lazy loading
         let finalHTML = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             let nav = NavDelegate()
             nav.onFinish = {
                 wv.navigationDelegate = nil
-                // انتظر الـ lazy loading بعد didFinish
                 let waitJS = """
                 new Promise((resolve) => {
                     let tries = 0;
@@ -259,7 +245,6 @@ class MangaService: NSObject, ObservableObject {
             forHTTPHeaderField: "User-Agent"
         )
 
-        // الكوكيز
         let wkCookies: [HTTPCookie] = await withCheckedContinuation { cont in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cont.resume(returning: $0) }
         }
