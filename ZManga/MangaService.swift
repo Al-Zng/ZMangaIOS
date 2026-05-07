@@ -7,7 +7,7 @@ class MangaService: NSObject, ObservableObject {
     static let shared = MangaService()
     private let baseURL = "https://lekmanga.site"
 
-    // WebView مخصص فقط لتحميل صفحات الفصول (lazy loading)
+    // WebView مخصص فقط لتحميل صفحات الفصول (lazy loading) ولتجاوز Cloudflare
     private var chapterWebView: WKWebView?
 
     private func getChapterWebView() -> WKWebView {
@@ -153,7 +153,15 @@ class MangaService: NSObject, ObservableObject {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let html = try await fetchHTML(urlString: "\(baseURL)/?s=\(encoded)&post_type=wp-manga&page=\(page)")
         return parseMangaList(html: html, extractChapterInfo: false)
-            .filter { !$0.slug.contains("feed") && !$0.slug.isEmpty && !$0.coverURL.isEmpty }
+            .filter { manga in
+                !manga.slug.isEmpty &&
+                !manga.slug.contains("feed") &&
+                !manga.coverURL.isEmpty &&
+                !isLogoOnly(manga.coverURL) &&
+                (manga.title.lowercased().contains(query.lowercased()) ||
+                 manga.slug.lowercased().contains(query.lowercased()) ||
+                 manga.genres.contains(where: { $0.lowercased().contains(query.lowercased()) }))
+            }
     }
 
     func fetchDetail(slug: String) async throws -> Manga {
@@ -416,7 +424,7 @@ class MangaService: NSObject, ObservableObject {
                      description: description, chapters: chapters, author: author)
     }
 
-    // MARK: - Parse Chapter Pages
+    // MARK: - Parse Chapter Pages (تجاهل صور الأغلفة)
 
     private func parseChapterPages(html: String) -> [String] {
         let content = extractReadingContent(html: html)
@@ -431,6 +439,8 @@ class MangaService: NSObject, ObservableObject {
         imgRegex.enumerateMatches(in: content, range: NSRange(location: 0, length: nsContent.length)) { match, _, _ in
             guard let match = match else { return }
             let tag = nsContent.substring(with: match.range)
+            // تجاهل الصور التي لا تحمل أي من هذه السمات (صور أغلفة، أيقونات، إلخ)
+            guard tag.contains("wp-manga-chapter-img") || tag.contains("data-src") || tag.contains("data-lazy-src") else { return }
             let url = firstCapture(pattern: #"data-lazy-src="([^"]+)""#, in: tag)
                    ?? firstCapture(pattern: #"data-src="([^"]+)""#, in: tag)
                    ?? firstCapture(pattern: #"\bsrc="([^"]+)""#, in: tag)
