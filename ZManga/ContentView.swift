@@ -19,15 +19,19 @@ struct ContentView: View {
             HomeView()
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(0)
+
             SearchView()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
                 .tag(1)
+
             LibraryView()
                 .tabItem { Label("Library", systemImage: "books.vertical") }
                 .tag(2)
+
             DownloadsView()
                 .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
                 .tag(3)
+
             HistoryView()
                 .tabItem { Label("History", systemImage: "clock") }
                 .tag(4)
