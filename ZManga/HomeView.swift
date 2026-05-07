@@ -1,4 +1,5 @@
 // HomeView.swift
+
 import SwiftUI
 
 struct HomeView: View {
@@ -293,7 +294,7 @@ struct PopularCard: View {
     }
 }
 
-// MARK: - Latest Update Row (modified: show only latest chapter number)
+// MARK: - Latest Update Row (shows latest chapter number instead of rating)
 struct LatestUpdateRow: View {
     let manga: Manga
     var body: some View {
